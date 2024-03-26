@@ -15,6 +15,7 @@ envs = MicroRTSGridModeVecEnv(
     ai2s=[microrts_ai.coacAI for _ in range(1)],
     map_paths=["maps/16x16/basesWorkers16x16.xml"],
     reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
+    autobuild=False,
 )
 # envs = VecVideoRecorder(envs, 'videos', record_video_trigger=lambda x: x % 4000 == 0, video_length=2000)
 
@@ -39,7 +40,7 @@ envs.reset()
 nvec = envs.action_space.nvec
 
 for i in range(10000):
-    # envs.render()
+    envs.render()
     action_mask = envs.get_action_mask()
     action_mask = action_mask.reshape(-1, action_mask.shape[-1])
     action_mask[action_mask == 0] = -9e8
