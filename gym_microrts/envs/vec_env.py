@@ -16,6 +16,10 @@ from PIL import Image
 
 import gym_microrts
 
+from pyrdf2vec import RDF2VecTransformer
+from pyrdf2vec.graphs import KG
+from pyrdf2vec.walkers import RandomWalker
+
 MICRORTS_CLONE_MESSAGE = """
 WARNING: the repository does not include the microrts git submodule.
 Executing `git submodule update --init --recursive` to clone it now.
@@ -54,6 +58,7 @@ class MicroRTSGridModeVecEnv:
         cycle_maps=[],
         autobuild=True,
         jvm_args=[],
+        prior=False,
     ):
 
         self.num_selfplay_envs = num_selfplay_envs
@@ -165,6 +170,21 @@ class MicroRTSGridModeVecEnv:
         self.source_unit_idxs = np.tile(np.arange(self.height * self.width), (self.num_envs, 1))
         self.source_unit_idxs = self.source_unit_idxs.reshape((self.source_unit_idxs.shape + (1,)))
 
+        if prior:
+            from rts import GameGraph
+            gg = GameGraph()
+            gg.addUnitTypeTable(self.real_utt)
+            gg_str = str(gg.toTurtle())
+            with open("game_graph.ttl", "w") as f:
+                f.write(gg_str)
+
+            kg = KG("game_graph.ttl")
+            walkers = [RandomWalker(4, max_walks=None, with_reverse=True)]
+
+            embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, [
+                "http://microrts.com/game/mainGame"])
+            self.prior = embeddings[0]
+
     def start_client(self):
 
         from ai.core import AI
@@ -202,6 +222,20 @@ class MicroRTSGridModeVecEnv:
         for i in range(1, self.num_planes_len):
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
         return obs_planes.reshape(self.height, self.width, -1)
+
+    # def _encode_obs_graph(self, obs):
+    #     from rts import GameGraph
+    #     gg = GameGraph()
+    #     gg.addUnitTypeTable(self.real_utt)
+    #     gg_str = str(gg.toTurtle())
+    #     with open("game_graph.ttl", "w") as f:
+    #         f.write(gg_str)
+    #
+    #     kg = KG("game_graph.ttl")
+    #     walkers = [RandomWalker(4, max_walks=None, with_reverse=True)]
+    #
+    #     embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, [
+    #         "http://microrts.com/game/mainGame"])
 
     def step_async(self, actions):
         actions = actions.reshape((self.num_envs, self.width * self.height, -1))
