@@ -18,6 +18,7 @@ import gym_microrts
 
 from pyrdf2vec import RDF2VecTransformer
 from pyrdf2vec.graphs import KG
+from pyrdf2vec.embedders import Word2Vec
 from pyrdf2vec.walkers import RandomWalker
 
 MICRORTS_CLONE_MESSAGE = """
@@ -56,9 +57,12 @@ class MicroRTSGridModeVecEnv:
         map_paths=["maps/10x10/basesTwoWorkers10x10.xml"],
         reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0]),
         cycle_maps=[],
-        autobuild=True,
+        autobuild=False,
         jvm_args=[],
         prior=False,
+        graph_map=None,
+        graph_depth=6,
+        seed=1,
     ):
 
         self.num_selfplay_envs = num_selfplay_envs
@@ -148,6 +152,28 @@ class MicroRTSGridModeVecEnv:
         )
         self.start_client()
 
+        self.graph_map = None
+        if prior:
+            self.graph_map = graph_map
+            if self.graph_map is None:
+                from rts import GameGraph
+                gg = GameGraph()
+                gg.addUnitTypeTable(self.real_utt)
+                gg_str = str(gg.toTurtle())
+                with open("game_graph.ttl", "w") as f:
+                    f.write(gg_str)
+
+                kg = KG("game_graph.ttl")
+                Word2Vec(workers=1)
+                walkers = [RandomWalker(max_depth=graph_depth, max_walks=None, with_reverse=False, random_state=seed)]
+
+                uts = [str(t) for t in gg.getUnitTypes()]
+                embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, [
+                    "http://microrts.com/game/mainGame"] + uts)
+                uts_map = {f"unitType_{int(ut.split('/')[-1])}": emb for ut, emb in zip(uts, embeddings[1:])}
+                uts_map[f"unitType_{-1}"] = np.zeros(embeddings[0].shape[0])
+                self.graph_map = {"mainGame": embeddings[0], **uts_map}
+
         # computed properties
         # [num_planes_hp(5), num_planes_resources(5), num_planes_player(3),
         # num_planes_unit_type(z), num_planes_unit_action(6), num_planes_terrain(2)]
@@ -155,8 +181,10 @@ class MicroRTSGridModeVecEnv:
         self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2]
         if partial_obs:
             self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2, 2]  # 2 extra for visibility
+        obs_length = sum(self.num_planes)
+        obs_length += len(self.graph_map["mainGame"]) if self.graph_map else 0
         self.observation_space = gym.spaces.Box(
-            low=0.0, high=1.0, shape=(self.height, self.width, sum(self.num_planes)), dtype=np.int32
+            low=0.0, high=1.0, shape=(self.height, self.width, obs_length), dtype=np.int32
         )
 
         self.num_planes_len = len(self.num_planes)
@@ -169,25 +197,6 @@ class MicroRTSGridModeVecEnv:
         self.action_plane_space = gym.spaces.MultiDiscrete(self.action_space_dims)
         self.source_unit_idxs = np.tile(np.arange(self.height * self.width), (self.num_envs, 1))
         self.source_unit_idxs = self.source_unit_idxs.reshape((self.source_unit_idxs.shape + (1,)))
-
-        self.graph_map = None
-        if prior:
-            from rts import GameGraph
-            gg = GameGraph()
-            gg.addUnitTypeTable(self.real_utt)
-            gg_str = str(gg.toTurtle())
-            with open("game_graph.ttl", "w") as f:
-                f.write(gg_str)
-
-            kg = KG("game_graph.ttl")
-            walkers = [RandomWalker(4, max_walks=None, with_reverse=False)]
-
-            uts = [str(t) for t in gg.getUnitTypes()]
-            embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, [
-                "http://microrts.com/game/mainGame"] + uts)
-            uts_map = {int(ut.split("/")[-1]): emb for ut, emb in zip(uts, embeddings[1:])}
-            uts_map[-1] = np.zeros(embeddings[0].shape[0])
-            self.graph_map = {"mainGame": embeddings[0], "unitType": uts_map}
 
     def start_client(self):
 
@@ -243,23 +252,9 @@ class MicroRTSGridModeVecEnv:
         for i in range(len(obs_ut_ids)):
             for j in range(len(obs_ut_ids[i])):
                 ut_id = obs_ut_ids[i][j] - 1
-                ut_embedding = self.graph_map["unitType"][ut_id]
+                ut_embedding = self.graph_map[f"unitType_{ut_id}"]
                 obs_ut_ids[i][j] = ut_embedding
         return np.array(obs_ut_ids)
-
-    # def _encode_obs_graph(self, obs):
-    #     from rts import GameGraph
-    #     gg = GameGraph()
-    #     gg.addUnitTypeTable(self.real_utt)
-    #     gg_str = str(gg.toTurtle())
-    #     with open("game_graph.ttl", "w") as f:
-    #         f.write(gg_str)
-    #
-    #     kg = KG("game_graph.ttl")
-    #     walkers = [RandomWalker(4, max_walks=None, with_reverse=True)]
-    #
-    #     embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, [
-    #         "http://microrts.com/game/mainGame"])
 
     def step_async(self, actions):
         actions = actions.reshape((self.num_envs, self.width * self.height, -1))

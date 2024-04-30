@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import itertools
+import json
 import os
 import random
 import shutil
@@ -62,6 +63,10 @@ def parse_args():
         help='the output path of the leaderboard csv')
     parser.add_argument('--maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
         help="the maps to do trueskill evaluations")
+    parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='if toggled, the observation space will be augmented with prior knowledge using graph embeddings')
+    parser.add_argument('--graph-map', type=str, default=None,
+        help='the path to json file with graph embeddings map to use for prior knowledge')
     # ["randomBiasedAI","workerRushAI","lightRushAI","coacAI"]
     # default=["randomBiasedAI","workerRushAI","lightRushAI","coacAI","randomAI","passiveAI","naiveMCTSAI","mixedBot","rojo","izanagi","tiamat","droplet","guidedRojoA3N"]
     args = parser.parse_args()
@@ -176,6 +181,10 @@ class Match:
         self.rl_ai2 = rl_ai2
         self.device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
         max_steps = 5000
+        graph_map = None
+        if args.prior and args.graph_map:
+            with open(args.graph_map, "r") as f:
+                graph_map = {k: np.array(v) for k, v in json.load(f).items()}
         if mode == 0:
             self.envs = MicroRTSGridModeVecEnv(
                 num_bot_envs=len(built_in_ais),
@@ -187,6 +196,8 @@ class Match:
                 map_paths=[map_path],
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
+                prior=args.prior,
+                graph_map=graph_map,
             )
             self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
@@ -201,6 +212,8 @@ class Match:
                 map_paths=[map_path],
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
+                prior=args.prior,
+                graph_map=graph_map,
             )
             self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
@@ -485,6 +498,7 @@ if __name__ == "__main__":
                                 loss=int(item == -1),
                             ).save()
 
+        print("Saving leaderboard csv")
         get_leaderboard().to_csv(args.output_path, index=False)
 
     print("=======================")

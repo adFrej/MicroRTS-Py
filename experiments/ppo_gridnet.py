@@ -1,6 +1,7 @@
 # http://proceedings.mlr.press/v97/han19a/han19a.pdf
 
 import argparse
+import json
 import os
 import random
 import subprocess
@@ -25,7 +26,7 @@ from gym_microrts.envs.vec_env import MicroRTSGridModeVecEnv
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
+    parser.add_argument('--exp-name', type=str, default="",
         help='the name of this experiment')
     parser.add_argument('--gym-id', type=str, default="MicroRTSGridModeVecEnv",
         help='the id of the gym environment')
@@ -95,6 +96,10 @@ def parse_args():
         help='the list of maps used during training')
     parser.add_argument('--eval-maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
         help='the list of maps used during evaluation')
+    parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='If toggled, the observation space will be augmented with prior knowledge using graph embeddings')
+    parser.add_argument('--walk-depth', type=int, default=6,
+        help='the depth of the prior graph walk')
 
     args = parser.parse_args()
     if not args.seed:
@@ -230,7 +235,7 @@ class Agent(nn.Module):
         return self.critic(self.encoder(x))
 
 
-def run_evaluation(model_path: str, output_path: str, eval_maps: List[str]):
+def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: bool = False, graph_map: str = None):
     args = [
         "python",
         "league.py",
@@ -246,8 +251,12 @@ def run_evaluation(model_path: str, output_path: str, eval_maps: List[str]):
         "ppo_gridnet",
         "--maps",
         *eval_maps,
+        "--prior",
+        str(prior),
+        "--graph-map",
+        str(graph_map),
     ]
-    fd = subprocess.Popen(args)
+    fd = subprocess.Popen(args, shell=True)
     print(f"Evaluating {model_path}")
     return_code = fd.wait()
     assert return_code == 0
@@ -300,7 +309,7 @@ if __name__ == "__main__":
     print(f"Save frequency: {args.save_frequency}")
 
     # TRY NOT TO MODIFY: setup the environment
-    experiment_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    experiment_name = f"{args.gym_id}__{os.path.basename(__file__).rstrip('.py')}{'__prior' if args.prior else ''}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.prod_mode:
         import wandb
 
@@ -312,6 +321,7 @@ if __name__ == "__main__":
             name=experiment_name,
             monitor_gym=True,
             save_code=True,
+            mode="disabled",
         )
         wandb.tensorboard.patch(save=False)
     writer = SummaryWriter(f"runs/{experiment_name}")
@@ -341,7 +351,16 @@ if __name__ == "__main__":
         map_paths=[args.train_maps[0]],
         reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
         cycle_maps=args.train_maps,
+        prior=args.prior,
+        graph_depth=args.walk_depth,
+        seed=args.seed,
     )
+    os.makedirs(f"models/{experiment_name}", exist_ok=True)
+    graph_map = None
+    if args.prior:
+        graph_map = f"models/{experiment_name}/graph_map.json"
+        with open(graph_map, "w") as f:
+            f.write(json.dumps({k: v.tolist() for k, v in envs.graph_map.items()}, indent=4))
     envs = MicroRTSStatsRecorder(envs, args.gamma)
     envs = VecMonitor(envs)
     if args.capture_video:
@@ -543,6 +562,8 @@ if __name__ == "__main__":
                     f"models/{experiment_name}/{global_step}.pt",
                     f"runs/{experiment_name}/{global_step}.csv",
                     args.eval_maps,
+                    args.prior,
+                    graph_map,
                 )
                 print(f"Queued models/{experiment_name}/{global_step}.pt")
                 future.add_done_callback(trueskill_writer.on_evaluation_done)

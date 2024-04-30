@@ -93,6 +93,7 @@ if __name__ == "__main__":
             name=experiment_name,
             monitor_gym=True,
             save_code=True,
+            mode="disabled",
         )
         CHECKPOINT_FREQUENCY = 10
     writer = SummaryWriter(f"runs/{experiment_name}")
