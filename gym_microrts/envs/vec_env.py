@@ -62,6 +62,7 @@ class MicroRTSGridModeVecEnv:
         prior=False,
         graph_map=None,
         graph_depth=6,
+        graph_vector_length=64,
         seed=1,
     ):
 
@@ -168,11 +169,17 @@ class MicroRTSGridModeVecEnv:
                 walkers = [RandomWalker(max_depth=graph_depth, max_walks=None, with_reverse=False, random_state=seed)]
 
                 uts = [str(t) for t in gg.getUnitTypes()]
-                embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, [
-                    "http://microrts.com/game/mainGame"] + uts)
-                uts_map = {f"unitType_{int(ut.split('/')[-1])}": emb for ut, emb in zip(uts, embeddings[1:])}
-                uts_map[f"unitType_{-1}"] = np.zeros(embeddings[0].shape[0])
-                self.graph_map = {"mainGame": embeddings[0], **uts_map}
+                embeddings, literals = RDF2VecTransformer(
+                    walkers=walkers,
+                    embedder=Word2Vec(vector_size=graph_vector_length, workers=1),
+                    verbose=1,
+                ).fit_transform(kg, ["http://microrts.com/game/mainGame"] + uts)
+                uts_map = {int(ut.split('/')[-1]): emb for ut, emb in zip(uts, embeddings[1:])}
+                uts_map[-1] = np.zeros(embeddings[0].shape[0])
+                self.graph_map = {"mainGame": embeddings[0], **{f"unitType_{k}": v for k, v in uts_map.items()}}
+                self.uts_map = uts_map
+            else:
+                self.uts_map = {int(k.split("_")[-1]): v for k, v in self.graph_map.items() if k.startswith("unitType_")}
 
         # computed properties
         # [num_planes_hp(5), num_planes_resources(5), num_planes_player(3),
@@ -228,7 +235,6 @@ class MicroRTSGridModeVecEnv:
 
     def _encode_obs(self, obs):
         # unitTypesMatrix is obs[3]
-        obs_ut = self._ut_ids_to_graph(obs[3])
         obs = obs.reshape(len(obs), -1).clip(0, np.array([self.num_planes]).T - 1)
         obs_planes = np.zeros((self.height * self.width, self.num_planes_prefix_sum[-1]), dtype=np.int32)
         obs_planes_idx = np.arange(len(obs_planes))
@@ -237,24 +243,15 @@ class MicroRTSGridModeVecEnv:
         for i in range(1, self.num_planes_len):
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
 
-        if obs_ut is not None:
-            obs_ut = obs_ut.reshape(self.height * self.width, -1)
-            obs_planes = obs_planes.tolist()
-            for i in range(len(obs_planes)):
-                obs_planes[i] = np.concatenate((obs_planes[i], obs_ut[i]))
-            obs_planes = np.array(obs_planes)
+        if self.graph_map:
+            obs_ut = self._ut_ids_to_graph(obs[3])
+            obs_planes = np.concatenate((obs_planes, obs_ut), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
     def _ut_ids_to_graph(self, obs_ut_ids):
-        if not self.graph_map:
-            return None
-        obs_ut_ids = obs_ut_ids.tolist()
-        for i in range(len(obs_ut_ids)):
-            for j in range(len(obs_ut_ids[i])):
-                ut_id = obs_ut_ids[i][j] - 1
-                ut_embedding = self.graph_map[f"unitType_{ut_id}"]
-                obs_ut_ids[i][j] = ut_embedding
-        return np.array(obs_ut_ids)
+        obs_ut_ids = obs_ut_ids - 1
+        u, inv = np.unique(obs_ut_ids, return_inverse=True)
+        return np.array([self.uts_map[x] for x in u])[inv].reshape(self.height * self.width, -1)
 
     def step_async(self, actions):
         actions = actions.reshape((self.num_envs, self.width * self.height, -1))

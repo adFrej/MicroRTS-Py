@@ -1,6 +1,7 @@
 # http://proceedings.mlr.press/v97/han19a/han19a.pdf
 
 import argparse
+import datetime
 import json
 import os
 import random
@@ -36,6 +37,8 @@ def parse_args():
         help='seed of the experiment')
     parser.add_argument('--total-timesteps', type=int, default=50000000,
         help='total timesteps of the experiments')
+    parser.add_argument('--num-eval', type=int, default=0,
+        help='total number of evaluations, not bigger than num_updates, no influence if 0')
     parser.add_argument('--torch-deterministic', type=lambda x: bool(strtobool(x)), default=True, nargs='?', const=True,
         help='if toggled, `torch.backends.cudnn.deterministic=False`')
     parser.add_argument('--cuda', type=lambda x: bool(strtobool(x)), default=True, nargs='?', const=True,
@@ -100,6 +103,8 @@ def parse_args():
         help='If toggled, the observation space will be augmented with prior knowledge using graph embeddings')
     parser.add_argument('--walk-depth', type=int, default=6,
         help='the depth of the prior graph walk')
+    parser.add_argument('--kg-vector-length', type=int, default=64,
+        help='the length of the kg embedding vector')
 
     args = parser.parse_args()
     if not args.seed:
@@ -109,6 +114,10 @@ def parse_args():
     args.minibatch_size = int(args.batch_size // args.n_minibatch)
     args.num_updates = args.total_timesteps // args.batch_size
     args.save_frequency = max(1, int(args.num_updates // args.num_models))
+    if args.num_eval != 0:
+        args.save_frequency = 1
+    if args.num_updates < args.num_eval or args.num_eval == 0:
+        args.num_eval = args.num_updates
     # fmt: on
     return args
 
@@ -353,6 +362,7 @@ if __name__ == "__main__":
         cycle_maps=args.train_maps,
         prior=args.prior,
         graph_depth=args.walk_depth,
+        graph_vector_length=args.kg_vector_length,
         seed=args.seed,
     )
     os.makedirs(f"models/{experiment_name}", exist_ok=True)
@@ -426,6 +436,8 @@ if __name__ == "__main__":
         args.prod_mode, writer, "gym-microrts-static-files/league.csv", "gym-microrts-static-files/league.csv"
     )
 
+    started = time.time()
+    eval_step = 0
     for update in range(starting_update, args.num_updates + 1):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -459,7 +471,9 @@ if __name__ == "__main__":
 
             for info in infos:
                 if "episode" in info.keys():
-                    print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+                    duration = time.time() - started
+                    estimated = duration * args.total_timesteps / global_step - duration
+                    print(f"global_step={global_step}, episodic_return={info['episode']['r']}, estimated_time_left={datetime.timedelta(seconds=estimated)}")
                     writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
                     for key in info["microrts_stats"]:
@@ -552,21 +566,23 @@ if __name__ == "__main__":
         if (update - 1) % args.save_frequency == 0:
             if not os.path.exists(f"models/{experiment_name}"):
                 os.makedirs(f"models/{experiment_name}")
-            torch.save(agent.state_dict(), f"models/{experiment_name}/agent.pt")
-            torch.save(agent.state_dict(), f"models/{experiment_name}/{global_step}.pt")
-            if args.prod_mode:
-                wandb.save(f"models/{experiment_name}/agent.pt", base_path=f"models/{experiment_name}", policy="now")
-            if eval_executor is not None:
-                future = eval_executor.submit(
-                    run_evaluation,
-                    f"models/{experiment_name}/{global_step}.pt",
-                    f"runs/{experiment_name}/{global_step}.csv",
-                    args.eval_maps,
-                    args.prior,
-                    graph_map,
-                )
-                print(f"Queued models/{experiment_name}/{global_step}.pt")
-                future.add_done_callback(trueskill_writer.on_evaluation_done)
+            if round(eval_step * args.num_updates / args.num_eval) == update - 1:
+                eval_step += 1
+                torch.save(agent.state_dict(), f"models/{experiment_name}/agent.pt")
+                torch.save(agent.state_dict(), f"models/{experiment_name}/{global_step}.pt")
+                if args.prod_mode:
+                    wandb.save(f"models/{experiment_name}/agent.pt", base_path=f"models/{experiment_name}", policy="now")
+                if eval_executor is not None:
+                    future = eval_executor.submit(
+                        run_evaluation,
+                        f"models/{experiment_name}/{global_step}.pt",
+                        f"runs/{experiment_name}/{global_step}.csv",
+                        args.eval_maps,
+                        args.prior,
+                        graph_map,
+                    )
+                    print(f"Queued models/{experiment_name}/{global_step}.pt")
+                    future.add_done_callback(trueskill_writer.on_evaluation_done)
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
