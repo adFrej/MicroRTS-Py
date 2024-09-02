@@ -159,27 +159,36 @@ class MicroRTSGridModeVecEnv:
             if self.graph_map is None:
                 from rts import GameGraph
                 gg = GameGraph()
-                gg.addUnitTypeTable(self.real_utt)
+                gg.processUnitTypeTable(self.real_utt)
                 gg_str = str(gg.toTurtle())
                 with open("game_graph.ttl", "w") as f:
                     f.write(gg_str)
 
                 kg = KG("game_graph.ttl")
                 Word2Vec(workers=1)
-                walkers = [RandomWalker(max_depth=graph_depth, max_walks=None, with_reverse=False, random_state=seed)]
+                walkers = [RandomWalker(max_depth=graph_depth//2, max_walks=None, with_reverse=True, random_state=seed, md5_bytes=None)]
 
                 uts = [str(t) for t in gg.getUnitTypes()]
+                ats = [str(t) for t in gg.getActionTypes()]
                 embeddings, literals = RDF2VecTransformer(
                     walkers=walkers,
                     embedder=Word2Vec(vector_size=graph_vector_length, workers=1),
                     verbose=1,
-                ).fit_transform(kg, ["http://microrts.com/game/mainGame"] + uts)
-                uts_map = {int(ut.split('/')[-1]): emb for ut, emb in zip(uts, embeddings[1:])}
+                ).fit_transform(kg, ["http://microrts.com/game/mainGame"] + uts + ats)
+                uts_map = {int(ut.split('/')[-1]): emb for ut, emb in zip(uts, embeddings[1:len(uts) + 1])}
                 uts_map[-1] = np.zeros(embeddings[0].shape[0])
-                self.graph_map = {"mainGame": embeddings[0], **{f"unitType_{k}": v for k, v in uts_map.items()}}
+                ats_map = {int(at.split('/')[-1]): emb for at, emb in zip(ats, embeddings[len(uts) + 1:])}
+                ats_map[-1] = np.zeros(embeddings[0].shape[0])
+                self.graph_map = {
+                    "mainGame": embeddings[0],
+                    **{f"unitType_{k}": v for k, v in uts_map.items()},
+                    **{f"actionType_{k}": v for k, v in ats_map.items()},
+                }
                 self.uts_map = uts_map
+                self.ats_map = ats_map
             else:
                 self.uts_map = {int(k.split("_")[-1]): v for k, v in self.graph_map.items() if k.startswith("unitType_")}
+                self.ats_map = {int(k.split("_")[-1]): v for k, v in self.graph_map.items() if k.startswith("actionType_")}
 
         # computed properties
         # [num_planes_hp(5), num_planes_resources(5), num_planes_player(3),
@@ -189,7 +198,7 @@ class MicroRTSGridModeVecEnv:
         if partial_obs:
             self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2, 2]  # 2 extra for visibility
         obs_length = sum(self.num_planes)
-        obs_length += len(self.graph_map["mainGame"]) if self.graph_map else 0
+        obs_length += len(self.graph_map["mainGame"]) * 2 if self.graph_map else 0
         self.observation_space = gym.spaces.Box(
             low=0.0, high=1.0, shape=(self.height, self.width, obs_length), dtype=np.int32
         )
@@ -244,14 +253,15 @@ class MicroRTSGridModeVecEnv:
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
 
         if self.graph_map:
-            obs_ut = self._ut_ids_to_graph(obs[3])
-            obs_planes = np.concatenate((obs_planes, obs_ut), axis=1)
+            obs_ut = self._ids_to_graph(obs[3] - 1, self.uts_map)
+            obs_at = self._ids_to_graph(np.where(obs[3] > 0, obs[4], -1), self.ats_map)
+            obs_planes = np.concatenate((obs_planes, obs_ut, obs_at), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
-    def _ut_ids_to_graph(self, obs_ut_ids):
-        obs_ut_ids = obs_ut_ids - 1
+    def _ids_to_graph(self, obs_ut_ids, id_map):
+        obs_ut_ids = obs_ut_ids
         u, inv = np.unique(obs_ut_ids, return_inverse=True)
-        return np.array([self.uts_map[x] for x in u])[inv].reshape(self.height * self.width, -1)
+        return np.array([id_map[x] for x in u])[inv].reshape(self.height * self.width, -1)
 
     def step_async(self, actions):
         actions = actions.reshape((self.num_envs, self.width * self.height, -1))

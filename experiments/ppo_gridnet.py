@@ -102,7 +102,7 @@ def parse_args():
     parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
         help='If toggled, the observation space will be augmented with prior knowledge using graph embeddings')
     parser.add_argument('--walk-depth', type=int, default=6,
-        help='the depth of the prior graph walk')
+        help='the depth of the prior graph walk measured in the number of relations')
     parser.add_argument('--kg-vector-length', type=int, default=64,
         help='the length of the kg embedding vector')
 

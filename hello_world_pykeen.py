@@ -21,7 +21,7 @@ from rts import GameGraph
 
 if __name__ == '__main__':
     gg = GameGraph()
-    gg.addUnitTypeTable(envs.real_utt)
+    gg.processUnitTypeTable(envs.real_utt)
     gg_str = str(gg.toTurtle())
     with open("game_graph.ttl", "w") as f:
         f.write(gg_str)

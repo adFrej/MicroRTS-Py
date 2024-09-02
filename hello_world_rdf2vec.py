@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 from gym_microrts import microrts_ai
 from gym_microrts.envs.vec_env import MicroRTSGridModeVecEnv
@@ -22,14 +23,18 @@ from pyrdf2vec.walkers import RandomWalker
 
 if __name__ == '__main__':
     gg = GameGraph()
-    gg.addUnitTypeTable(envs.real_utt)
+    gg.processUnitTypeTable(envs.real_utt)
     gg_str = str(gg.toTurtle())
     with open("game_graph.ttl", "w") as f:
         f.write(gg_str)
 
-    kg = KG("game_graph.ttl")
-    walkers = [RandomWalker(4, with_reverse=True)]
+    triples = gg.getTriples()
+    df_triples = pd.DataFrame({"subject": [t[0] for t in triples], "predicate": [t[1] for t in triples], "object": [t[2] for t in triples]}, dtype=str)
+    df_triples.to_csv("triples.tsv", index=False, header=False)
 
-    embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, ["http://microrts.com/game/mainGame"])
+    kg = KG("game_graph.ttl")
+    walkers = [RandomWalker(max_depth=2, with_reverse=True, md5_bytes=None)]
+
+    embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, ["http://microrts.com/game/unit-type/3"])
     print(embeddings)
     print(literals)
