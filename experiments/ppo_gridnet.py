@@ -2,7 +2,6 @@
 
 import argparse
 import datetime
-import json
 import os
 import random
 import subprocess
@@ -364,13 +363,12 @@ if __name__ == "__main__":
         graph_depth=args.walk_depth,
         graph_vector_length=args.kg_vector_length,
         seed=args.seed,
+        model_dir=f"models/{experiment_name}",
     )
     os.makedirs(f"models/{experiment_name}", exist_ok=True)
     graph_map = None
     if args.prior:
         graph_map = f"models/{experiment_name}/graph_map.json"
-        with open(graph_map, "w") as f:
-            f.write(json.dumps({k: v.tolist() for k, v in envs.graph_map.items()}, indent=4))
     envs = MicroRTSStatsRecorder(envs, args.gamma)
     envs = VecMonitor(envs)
     if args.capture_video:

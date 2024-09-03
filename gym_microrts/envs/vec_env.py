@@ -10,6 +10,7 @@ import gym
 import jpype
 import jpype.imports
 import numpy as np
+import pandas as pd
 from jpype.imports import registerDomain
 from jpype.types import JArray, JInt
 from PIL import Image
@@ -18,8 +19,9 @@ import gym_microrts
 
 from pyrdf2vec import RDF2VecTransformer
 from pyrdf2vec.graphs import KG
-from pyrdf2vec.embedders import Word2Vec
 from pyrdf2vec.walkers import RandomWalker
+
+from gym_microrts.word_2_vec_preprocessing import Word2VecPreprocessing, process_graph_entity
 
 MICRORTS_CLONE_MESSAGE = """
 WARNING: the repository does not include the microrts git submodule.
@@ -64,6 +66,7 @@ class MicroRTSGridModeVecEnv:
         graph_depth=6,
         graph_vector_length=64,
         seed=1,
+        model_dir=".",
     ):
 
         self.num_selfplay_envs = num_selfplay_envs
@@ -161,18 +164,24 @@ class MicroRTSGridModeVecEnv:
                 gg = GameGraph()
                 gg.processUnitTypeTable(self.real_utt)
                 gg_str = str(gg.toTurtle())
-                with open("game_graph.ttl", "w") as f:
+                os.makedirs(model_dir, exist_ok=True)
+                with open(os.path.join(model_dir, "graph.ttl"), "w") as f:
                     f.write(gg_str)
 
-                kg = KG("game_graph.ttl")
-                Word2Vec(workers=1)
+                triples = gg.getTriples()
+                df_triples = pd.DataFrame({"subject": [t[0] for t in triples],
+                                           "predicate": [t[1] for t in triples],
+                                           "object": [t[2] for t in triples]}, dtype=str)
+                df_triples.to_csv(os.path.join(model_dir, "triples.tsv"), index=False, header=False)
+
+                kg = KG(os.path.join(model_dir, "graph.ttl"))
                 walkers = [RandomWalker(max_depth=graph_depth//2, max_walks=None, with_reverse=True, random_state=seed, md5_bytes=None)]
 
                 uts = [str(t) for t in gg.getUnitTypes()]
                 ats = [str(t) for t in gg.getActionTypes()]
                 embeddings, literals = RDF2VecTransformer(
                     walkers=walkers,
-                    embedder=Word2Vec(vector_size=graph_vector_length, workers=1),
+                    embedder=Word2VecPreprocessing(processor=process_graph_entity, vector_size=graph_vector_length, workers=1),
                     verbose=1,
                 ).fit_transform(kg, ["http://microrts.com/game/mainGame"] + uts + ats)
                 uts_map = {int(ut.split('/')[-1]): emb for ut, emb in zip(uts, embeddings[1:len(uts) + 1])}
@@ -184,6 +193,8 @@ class MicroRTSGridModeVecEnv:
                     **{f"unitType_{k}": v for k, v in uts_map.items()},
                     **{f"actionType_{k}": v for k, v in ats_map.items()},
                 }
+                with open(os.path.join(model_dir, "graph_map.json"), "w") as f:
+                    f.write(json.dumps({k: v.tolist() for k, v in self.graph_map.items()}, indent=4))
                 self.uts_map = uts_map
                 self.ats_map = ats_map
             else:

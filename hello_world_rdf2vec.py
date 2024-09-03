@@ -1,8 +1,13 @@
 import numpy as np
 import pandas as pd
 
+from pyrdf2vec import RDF2VecTransformer
+from pyrdf2vec.graphs import KG
+from pyrdf2vec.walkers import RandomWalker
+
 from gym_microrts import microrts_ai
 from gym_microrts.envs.vec_env import MicroRTSGridModeVecEnv
+from gym_microrts.word_2_vec_preprocessing import Word2VecPreprocessing, process_graph_entity
 
 envs = MicroRTSGridModeVecEnv(
     num_selfplay_envs=2,
@@ -17,9 +22,6 @@ envs = MicroRTSGridModeVecEnv(
 
 from rts import GameGraph
 
-from pyrdf2vec import RDF2VecTransformer
-from pyrdf2vec.graphs import KG
-from pyrdf2vec.walkers import RandomWalker
 
 if __name__ == '__main__':
     gg = GameGraph()
@@ -29,12 +31,16 @@ if __name__ == '__main__':
         f.write(gg_str)
 
     triples = gg.getTriples()
-    df_triples = pd.DataFrame({"subject": [t[0] for t in triples], "predicate": [t[1] for t in triples], "object": [t[2] for t in triples]}, dtype=str)
+    df_triples = pd.DataFrame(
+        {"subject": [t[0] for t in triples], "predicate": [t[1] for t in triples], "object": [t[2] for t in triples]},
+        dtype=str)
     df_triples.to_csv("triples.tsv", index=False, header=False)
 
     kg = KG("game_graph.ttl")
     walkers = [RandomWalker(max_depth=2, with_reverse=True, md5_bytes=None)]
 
-    embeddings, literals = RDF2VecTransformer(walkers=walkers, verbose=1).fit_transform(kg, ["http://microrts.com/game/unit-type/3"])
+    embeddings, literals = RDF2VecTransformer(walkers=walkers,
+                                              embedder=Word2VecPreprocessing(processor=process_graph_entity),
+                                              verbose=1).fit_transform(kg, ["http://microrts.com/game/unit/3"])
     print(embeddings)
     print(literals)
