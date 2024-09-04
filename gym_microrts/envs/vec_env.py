@@ -66,7 +66,7 @@ class MicroRTSGridModeVecEnv:
         graph_depth=6,
         graph_vector_length=64,
         seed=1,
-        model_dir=".",
+        runs_dir=".",
     ):
 
         self.num_selfplay_envs = num_selfplay_envs
@@ -164,17 +164,17 @@ class MicroRTSGridModeVecEnv:
                 gg = GameGraph()
                 gg.processUnitTypeTable(self.real_utt)
                 gg_str = str(gg.toTurtle())
-                os.makedirs(model_dir, exist_ok=True)
-                with open(os.path.join(model_dir, "graph.ttl"), "w") as f:
+                os.makedirs(runs_dir, exist_ok=True)
+                with open(os.path.join(runs_dir, "graph.ttl"), "w") as f:
                     f.write(gg_str)
 
                 triples = gg.getTriples()
                 df_triples = pd.DataFrame({"subject": [t[0] for t in triples],
                                            "predicate": [t[1] for t in triples],
                                            "object": [t[2] for t in triples]}, dtype=str)
-                df_triples.to_csv(os.path.join(model_dir, "triples.tsv"), index=False, header=False)
+                df_triples.to_csv(os.path.join(runs_dir, "triples.tsv"), index=False, header=False)
 
-                kg = KG(os.path.join(model_dir, "graph.ttl"))
+                kg = KG(os.path.join(runs_dir, "graph.ttl"))
                 walkers = [RandomWalker(max_depth=graph_depth//2, max_walks=None, with_reverse=True, random_state=seed, md5_bytes=None)]
 
                 uts = [str(t) for t in gg.getUnitTypes()]
@@ -193,7 +193,7 @@ class MicroRTSGridModeVecEnv:
                     **{f"unitType_{k}": v for k, v in uts_map.items()},
                     **{f"actionType_{k}": v for k, v in ats_map.items()},
                 }
-                with open(os.path.join(model_dir, "graph_map.json"), "w") as f:
+                with open(os.path.join(runs_dir, "graph_map.json"), "w") as f:
                     f.write(json.dumps({k: v.tolist() for k, v in self.graph_map.items()}, indent=4))
                 self.uts_map = uts_map
                 self.ats_map = ats_map
