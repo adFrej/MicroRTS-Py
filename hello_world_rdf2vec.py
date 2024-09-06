@@ -37,7 +37,7 @@ if __name__ == '__main__':
     df_triples.to_csv("triples.tsv", index=False, header=False)
 
     kg = KG("game_graph.ttl")
-    walkers = [RandomWalker(max_depth=2, with_reverse=True, md5_bytes=None)]
+    walkers = [RandomWalker(max_depth=3, with_reverse=False, md5_bytes=None)]
 
     embeddings, literals = RDF2VecTransformer(walkers=walkers,
                                               embedder=Word2VecPreprocessing(processor=process_graph_entity),

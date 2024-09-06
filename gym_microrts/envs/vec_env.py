@@ -64,6 +64,8 @@ class MicroRTSGridModeVecEnv:
         prior=False,
         graph_map=None,
         graph_depth=6,
+        graph_walks=None,
+        graph_reverse=False,
         graph_vector_length=64,
         seed=1,
         runs_dir=".",
@@ -174,11 +176,24 @@ class MicroRTSGridModeVecEnv:
                                            "object": [t[2] for t in triples]}, dtype=str)
                 df_triples.to_csv(os.path.join(runs_dir, "triples.tsv"), index=False, header=False)
 
-                kg = KG(os.path.join(runs_dir, "graph.ttl"))
-                walkers = [RandomWalker(max_depth=graph_depth//2, max_walks=None, with_reverse=True, random_state=seed, md5_bytes=None)]
-
                 uts = [str(t) for t in gg.getUnitTypes()]
                 ats = [str(t) for t in gg.getActionTypes()]
+
+                if graph_reverse:
+                    graph_depth //= 2
+                    graph_walks = int((graph_walks/(1 + len(uts) + len(ats)))**(1/2)) if graph_walks is not None else None # sth wrong
+                else:
+                    graph_walks = graph_walks//(1 + len(uts) + len(ats)) if graph_walks is not None else None
+
+                kg = KG(os.path.join(runs_dir, "graph.ttl"))
+                walkers = [RandomWalker(
+                    max_depth=graph_depth,
+                    max_walks=graph_walks,
+                    with_reverse=graph_reverse,
+                    random_state=seed,
+                    n_jobs=6,
+                    md5_bytes=None)]
+
                 embeddings, literals = RDF2VecTransformer(
                     walkers=walkers,
                     embedder=Word2VecPreprocessing(processor=process_graph_entity, vector_size=graph_vector_length, workers=1),

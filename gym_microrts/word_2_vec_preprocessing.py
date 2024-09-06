@@ -32,6 +32,6 @@ def process_graph_entity(entity: str) -> str:
     else:
         entity = entity.replace("http://microrts.com/", "")
     entity = entity.replace("/", ": ")
-    entity = entity.replace("-", " ")
+    # entity = entity.replace("-", " ")
     entity = re.sub(r"([a-z])([A-Z])", lambda m: f"{m.group(1)} {m.group(2).lower()}", entity)
     return entity

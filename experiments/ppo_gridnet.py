@@ -102,6 +102,10 @@ def parse_args():
         help='If toggled, the observation space will be augmented with prior knowledge using graph embeddings')
     parser.add_argument('--walk-depth', type=int, default=6,
         help='the depth of the prior graph walk measured in the number of relations')
+    parser.add_argument('--walk-number', type=int, default=None,
+        help='the total number of walks')
+    parser.add_argument('--walk-reverse', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='If toggled, extracts children\'s and parents\' walks of the entity')
     parser.add_argument('--kg-vector-length', type=int, default=64,
         help='the length of the kg embedding vector')
 
@@ -361,6 +365,8 @@ if __name__ == "__main__":
         cycle_maps=args.train_maps,
         prior=args.prior,
         graph_depth=args.walk_depth,
+        graph_walks=args.walk_number,
+        graph_reverse=args.walk_reverse,
         graph_vector_length=args.kg_vector_length,
         seed=args.seed,
         runs_dir=f"runs/{experiment_name}",
