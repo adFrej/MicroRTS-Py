@@ -284,9 +284,9 @@ class MicroRTSGridModeVecEnv:
             obs_planes = np.concatenate((obs_planes, obs_ut, obs_at), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
-    def _ids_to_graph(self, obs_ut_ids, id_map):
-        obs_ut_ids = obs_ut_ids
-        u, inv = np.unique(obs_ut_ids, return_inverse=True)
+    def _ids_to_graph(self, obs_ids, id_map):
+        obs_ids = obs_ids
+        u, inv = np.unique(obs_ids, return_inverse=True)
         return np.array([id_map[x] for x in u])[inv].reshape(self.height * self.width, -1)
 
     def step_async(self, actions):
