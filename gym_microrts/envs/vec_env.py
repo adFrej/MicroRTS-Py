@@ -335,7 +335,7 @@ class MicroRTSGridModeVecEnv:
         ratings = {}
         actions_ = []
         for action in actions:
-            if not bool(self.graph.value(subject=action, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsSelf"))):
+            if len(neighbours) > 0 and not bool(self.graph.value(subject=action, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsSelf"))):
                 targets_player = str(self.graph.value(subject=action, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsPlayer")))
                 targets = [self._node_to_id(u) for u in self.graph.objects(action, rdflib.URIRef("http://microrts.com/game/action/targets"))]
                 targeted_neighbours = neighbours[np.isin(neighbours[:, 3] - 1, targets) & (neighbours_relation == targets_player)]
@@ -352,8 +352,9 @@ class MicroRTSGridModeVecEnv:
                 ratings[action] = self._rate_action(action, unit)
                 prefers_self, prefers_target, prefers_friendly, prefers_enemy = self._get_prefers(action)
                 ratings[action] += self._rate_prefers_many(prefers_self, [obs_ij])
-                ratings[action] += self._rate_prefers_many(prefers_friendly, neighbours[neighbours_relation == "friendly"])
-                ratings[action] += self._rate_prefers_many(prefers_enemy, neighbours[neighbours_relation == "enemy"])
+                if len(neighbours) > 0:
+                    ratings[action] += self._rate_prefers_many(prefers_friendly, neighbours[neighbours_relation == "friendly"])
+                    ratings[action] += self._rate_prefers_many(prefers_enemy, neighbours[neighbours_relation == "enemy"])
 
         if len(actions_) == 0:
             return random.choice(actions)
