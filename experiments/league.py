@@ -65,8 +65,10 @@ def parse_args():
         help="the maps to do trueskill evaluations")
     parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
         help='if toggled, the observation space will be augmented with prior knowledge using graph embeddings')
-    parser.add_argument('--graph-map', type=str, default=None,
-        help='the path to json file with graph embeddings map to use for prior knowledge')
+    parser.add_argument('--prior-advice-freq', type=int, default=10,
+        help='the number of steps between refreshing the prior advice')
+    parser.add_argument('--runs-dir', type=str, default=None,
+        help='the path to directory with output runs data')
     # ["randomBiasedAI","workerRushAI","lightRushAI","coacAI"]
     # default=["randomBiasedAI","workerRushAI","lightRushAI","coacAI","randomAI","passiveAI","naiveMCTSAI","mixedBot","rojo","izanagi","tiamat","droplet","guidedRojoA3N"]
     args = parser.parse_args()
@@ -181,10 +183,6 @@ class Match:
         self.rl_ai2 = rl_ai2
         self.device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
         max_steps = 5000
-        graph_map = None
-        if args.prior and args.graph_map:
-            with open(args.graph_map, "r") as f:
-                graph_map = {k: np.array(v) for k, v in json.load(f).items()}
         if mode == 0:
             self.envs = MicroRTSGridModeVecEnv(
                 num_bot_envs=len(built_in_ais),
@@ -197,7 +195,8 @@ class Match:
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
                 prior=args.prior,
-                graph_map=graph_map,
+                prior_advice_freq=args.prior_advice_freq,
+                runs_dir=args.runs_dir,
             )
             self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
@@ -213,7 +212,8 @@ class Match:
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
                 prior=args.prior,
-                graph_map=graph_map,
+                prior_advice_freq=args.prior_advice_freq,
+                runs_dir=args.runs_dir,
             )
             self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))

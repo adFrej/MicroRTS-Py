@@ -108,6 +108,8 @@ def parse_args():
         help='If toggled, extracts children\'s and parents\' walks of the entity')
     parser.add_argument('--kg-vector-length', type=int, default=64,
         help='the length of the kg embedding vector')
+    parser.add_argument('--prior-advice-freq', type=int, default=10,
+        help='the number of steps between refreshing the prior advice')
 
     args = parser.parse_args()
     if not args.seed:
@@ -247,7 +249,7 @@ class Agent(nn.Module):
         return self.critic(self.encoder(x))
 
 
-def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: bool = False, graph_map: str = None):
+def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: bool = False, prior_advice_freq: int = 10, runs_dir: str = None):
     args = [
         "python",
         "league.py",
@@ -265,8 +267,10 @@ def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prio
         *eval_maps,
         "--prior",
         str(prior),
-        "--graph-map",
-        str(graph_map),
+        "--prior-advice-freq",
+        str(prior_advice_freq),
+        "--runs-dir",
+        str(runs_dir),
     ]
     fd = subprocess.Popen(args, shell=True)
     print(f"Evaluating {model_path}")
@@ -350,6 +354,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
+    runs_dir = f"runs/{experiment_name}"
     envs = MicroRTSGridModeVecEnv(
         num_selfplay_envs=args.num_selfplay_envs,
         num_bot_envs=args.num_bot_envs,
@@ -368,12 +373,10 @@ if __name__ == "__main__":
         graph_walks=args.walk_number,
         graph_reverse=args.walk_reverse,
         graph_vector_length=args.kg_vector_length,
+        prior_advice_freq=args.prior_advice_freq,
         seed=args.seed,
-        runs_dir=f"runs/{experiment_name}",
+        runs_dir=runs_dir,
     )
-    graph_map = None
-    if args.prior:
-        graph_map = f"runs/{experiment_name}/graph_map.json"
     envs = MicroRTSStatsRecorder(envs, args.gamma)
     envs = VecMonitor(envs)
     if args.capture_video:
@@ -582,7 +585,8 @@ if __name__ == "__main__":
                         f"runs/{experiment_name}/{global_step}.csv",
                         args.eval_maps,
                         args.prior,
-                        graph_map,
+                        args.prior_advice_freq,
+                        runs_dir,
                     )
                     print(f"Queued models/{experiment_name}/{global_step}.pt")
                     future.add_done_callback(trueskill_writer.on_evaluation_done)
