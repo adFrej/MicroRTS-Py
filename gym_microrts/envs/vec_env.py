@@ -319,12 +319,13 @@ class MicroRTSGridModeVecEnv:
         return np.array([id_map[x] for x in u])[inv]
 
     def _advise_action(self, obs_ij, neighbours):
-        neighbours_relation = self._units_relation(obs_ij[2], neighbours[:, 2]) if len(neighbours) > 0 else np.array([])
-
         unit = obs_ij[3]
         unit = unit - 1
         if unit == -1:
             return -1
+
+        neighbours_relation = self._units_relation(obs_ij[2], neighbours[:, 2]) if len(neighbours) > 0 else np.array([])
+
         actions = list(self.graph.objects(rdflib.URIRef(f"http://microrts.com/game/unit/{unit}"), rdflib.URIRef("http://microrts.com/game/unit/does")))
         if len(actions) == 0:
             return -1
@@ -364,11 +365,12 @@ class MicroRTSGridModeVecEnv:
         return int(node.split("/")[-1])
 
     def _get_neighbours(self, obs, i, j):
+        if obs[3, i, j] == 0:
+            return np.array([])
         neighbours = []
-        for x in range(i - 1, i + 2):
-            for y in range(j - 1, j + 2):
-                if 0 <= x < self.height and 0 <= y < self.width and obs[3, x, y] > 0:
-                    neighbours.append(obs[:, x, y])
+        for x, y in [(i + 1, j), (i, j + 1), (i - 1, j), (i, j - 1)]:
+            if 0 <= x < self.height and 0 <= y < self.width and obs[3, x, y] > 0:
+                neighbours.append(obs[:, x, y])
         return np.array(neighbours)
 
     @staticmethod
