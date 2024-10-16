@@ -350,16 +350,23 @@ class MicroRTSGridModeVecEnv:
         for action_node in action_nodes:
             prefers_self, prefers_target, prefers_friendly, prefers_enemy = self._get_prefers(action_node)
             action_id = self._node_to_id(action_node)
+            rating = 0.
 
             produce_type = None
             if action_id == 4:#creates
                 produces = self.graph.objects(rdflib.URIRef(f"http://microrts.com/game/unit/{unit}"), rdflib.URIRef("http://microrts.com/game/unit/produces"))
-                min_cost = float("inf")
+                action_ratings = self.graph.objects(action, rdflib.URIRef("http://microrts.com/game/action/describedByInCreates"))
+                max_produce_rating = float("-inf")
                 for p in produces:
-                    cost = int(self.graph.value(subject=p, predicate=rdflib.URIRef("http://microrts.com/game/unit/hasCost")))
-                    if cost < min_cost:
+                    unit_ratings = int(self.graph.value(subject=p, predicate=rdflib.URIRef("http://microrts.com/game/unit/ranks")))
+                    ratings = list(set(action_ratings) & set(unit_ratings))
+                    r = 0.
+                    for rating in ratings:
+                        r += 1. if str(rating).endswith("Good") else 0. if str(rating).endswith("Medium") else -1.
+                    if r > max_produce_rating:
                         produce_type = self._node_to_id(p)
-                        min_cost = cost
+                        max_produce_rating = r
+                rating += max_produce_rating
 
             targets_distance = str(self.graph.value(subject=action_node, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsDistance")))
             targets_player = str(self.graph.value(subject=action_node, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsPlayer")))
@@ -369,12 +376,12 @@ class MicroRTSGridModeVecEnv:
                 for t, r in zip(targets, relative_pos):
                     action = self._id_to_action(action_id, r, produce_type)
                     actions.append(action)
-                    ratings[action.tobytes()] = self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, t)
+                    ratings[action.tobytes()] = rating + self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, t)
 
             elif targets_distance == "self":
                 action = self._id_to_action(action_id, None, produce_type)
                 actions.append(action)
-                ratings[action.tobytes()] = self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy)
+                ratings[action.tobytes()] = rating + self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy)
 
             elif targets_distance == "adjacent" and len(neighbours) > 0:
                 targeted_neighbours = neighbours[neighbours_relation == targets_player]
@@ -393,7 +400,7 @@ class MicroRTSGridModeVecEnv:
                 for n, d in zip(targeted_neighbours, targeted_directions):
                     action = self._id_to_action(action_id, d, produce_type)
                     actions.append(action)
-                    ratings[action.tobytes()] = self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, n)
+                    ratings[action.tobytes()] = rating + self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, n)
 
         if len(actions) == 0:
             raise ValueError("No actions available")
