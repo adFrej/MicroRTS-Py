@@ -258,7 +258,7 @@ def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prio
         "--update-db",
         "false",
         "--cuda",
-        "false",
+        "true",
         "--output-path",
         output_path,
         "--model-type",

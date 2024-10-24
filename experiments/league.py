@@ -504,4 +504,7 @@ if __name__ == "__main__":
     print("=======================")
     print(get_leaderboard())
     if not args.update_db:
-        os.remove(dbpath)
+        try:
+            os.remove(dbpath)
+        except Exception as e:
+            print("Could not remove the temporary database file", e)
