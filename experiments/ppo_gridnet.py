@@ -187,9 +187,10 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs, mapsize=16 * 16):
+    def __init__(self, envs, mapsize=16 * 16, rdf_only=False):
         super(Agent, self).__init__()
         self.mapsize = mapsize
+        self.rdf_only = rdf_only
         h, w, c = envs.observation_space.shape
         self.encoder = nn.Sequential(
             Transpose((0, 3, 1, 2)),
@@ -216,6 +217,10 @@ class Agent(nn.Module):
         self.register_buffer("mask_value", torch.tensor(-1e8))
 
     def get_action_and_value(self, x, action=None, invalid_action_masks=None, envs=None, device=None):
+        if self.rdf_only:
+            a = x[:, :, :, 29:]
+            return a, torch.zeros(x.shape[0], x.shape[1]), torch.zeros(x.shape[0], x.shape[1]), invalid_action_masks, torch.zeros(x.shape[0], x.shape[1])
+
         hidden = self.encoder(x)
         logits = self.actor(hidden)
         grid_logits = logits.reshape(-1, envs.action_plane_space.nvec.sum())
@@ -246,10 +251,12 @@ class Agent(nn.Module):
         return action, logprob.sum(1).sum(1), entropy.sum(1).sum(1), invalid_action_masks, self.critic(hidden)
 
     def get_value(self, x):
+        if self.rdf_only:
+            return torch.zeros(x.shape[0], x.shape[1])
         return self.critic(self.encoder(x))
 
 
-def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: bool = False, prior_advice_freq: int = 10, runs_dir: str = None):
+def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: bool = False, prior_advice_freq: int = 10, runs_dir: str = None, seed: int = 1):
     args = [
         "python",
         "league.py",
@@ -271,6 +278,8 @@ def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prio
         str(prior_advice_freq),
         "--runs-dir",
         str(runs_dir),
+        "--seed",
+        str(seed),
     ]
     fd = subprocess.Popen(args, shell=True)
     print(f"Evaluating {model_path}")
@@ -582,11 +591,12 @@ if __name__ == "__main__":
                     future = eval_executor.submit(
                         run_evaluation,
                         f"models/{experiment_name}/{global_step}.pt",
-                        f"runs/{experiment_name}/{global_step}.csv",
+                        f"{global_step}.csv",
                         args.eval_maps,
                         args.prior,
                         args.prior_advice_freq,
                         runs_dir,
+                        args.seed,
                     )
                     print(f"Queued models/{experiment_name}/{global_step}.pt")
                     future.add_done_callback(trueskill_writer.on_evaluation_done)

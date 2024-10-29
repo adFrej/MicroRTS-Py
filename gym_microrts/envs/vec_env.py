@@ -12,6 +12,7 @@ import jpype
 import jpype.imports
 import numpy as np
 import pandas as pd
+from scipy.special import softmax
 import rdflib
 from jpype.imports import registerDomain
 from jpype.types import JArray, JInt
@@ -65,6 +66,7 @@ class MicroRTSGridModeVecEnv:
         jvm_args=[],
         prior=False,
         rdf2vec=False,
+        advice_encode=True,
         graph_depth=6,
         graph_walks=None,
         graph_reverse=False,
@@ -168,6 +170,7 @@ class MicroRTSGridModeVecEnv:
         self.prior = prior
         if self.prior:
             self.rdf2vec = rdf2vec
+            self.advice_encode = advice_encode
             if not os.path.exists(os.path.join(runs_dir, graph_map_file)):
                 from rts import GameGraph
                 gg = GameGraph()
@@ -234,6 +237,9 @@ class MicroRTSGridModeVecEnv:
             self.graph.parse(data=gg_str, format="turtle")
             self.advice_freq = prior_advice_freq
             self.advice_cache = np.zeros((self.height * self.width), dtype=np.int32) - 1
+            self.future_pos = np.zeros((self.height, self.width), dtype=np.int32)
+            self.estimated_resources = 5
+            self.random_generator = np.random.default_rng(seed)
 
         # computed properties
         # [num_planes_hp(5), num_planes_resources(5), num_planes_player(3),
@@ -241,12 +247,13 @@ class MicroRTSGridModeVecEnv:
 
         self.action_space_dims = [6, 4, 4, 4, 4, len(self.utt["unitTypes"]), 7 * 7]
         self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2]
-        if self.prior and not self.rdf2vec:
+        if self.prior and not self.rdf2vec and self.advice_encode:
             self.num_planes += self.action_space_dims
         if partial_obs:
             self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2, 2]  # 2 extra for visibility
         obs_length = sum(self.num_planes)
         obs_length += len(self.graph_map["mainGame"]) * 3 if self.prior and self.rdf2vec else 0
+        obs_length += 7 if self.prior and not self.advice_encode else 0
         self.observation_space = gym.spaces.Box(
             low=0.0, high=1.0, shape=(self.height, self.width, obs_length), dtype=np.int32
         )
@@ -300,18 +307,26 @@ class MicroRTSGridModeVecEnv:
                 advices = np.zeros(obs[0].shape, dtype=np.int32)
             else:
                 advices = np.zeros((obs[0].shape[0], obs[0].shape[1], 7), dtype=np.int32)
+            obs_5 = obs[5].copy()
+            self.future_pos = np.where(np.sum(obs, axis=0) == 0, self.future_pos, np.zeros_like(self.future_pos))
+            self.future_pos -= self.advice_freq
+            self.future_pos = np.clip(self.future_pos, 0, None)
+            obs[5] = np.sign(self.future_pos)
             for i in range(obs[0].shape[0]):
                 for j in range(obs[0][i].shape[0]):
                     a = self._advise_action(i, j, obs)
                     advices[i, j] = a if a is not None else -1 if self.rdf2vec else np.zeros(7)
+            obs[5] = obs_5
             if self.rdf2vec:
                 advices = advices.reshape(-1, len(advices[0, 0]))
                 advices = self._ids_to_graph(advices, self.ats_map)
-            else:
+            elif self.advice_encode:
                 advices = np.transpose(advices, (2, 0, 1))
+            else:
+                advices = advices.reshape(-1, len(advices[0, 0]))
             self.advice_cache = advices
 
-        if self.prior and not self.rdf2vec:
+        if self.prior and not self.rdf2vec and self.advice_encode:
             # self.advice_cache = np.where(obs[[3]] > 0, self.advice_cache, np.zeros_like(self.advice_cache))
             obs = np.concatenate((obs, self.advice_cache), axis=0)
         obs = obs.reshape(len(obs), -1).clip(0, np.array([self.num_planes]).T - 1)
@@ -322,13 +337,17 @@ class MicroRTSGridModeVecEnv:
         for i in range(1, self.num_planes_len):
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
 
-        if self.prior and not self.rdf2vec:
-            obs_planes = np.where(obs[[3]].T > 0, obs_planes, np.concatenate((obs_planes[:, :29], np.zeros_like(obs_planes[:, 29:])), axis=1))
-        if self.prior and self.rdf2vec:
-            self.advice_cache = np.where(obs[[3]].T > 0, self.advice_cache, np.zeros_like(self.advice_cache))
-            obs_ut = self._ids_to_graph(obs[3] - 1, self.uts_map)
-            obs_at = self._ids_to_graph(np.where(obs[3] > 0, obs[4], -1), self.ats_map)
-            obs_planes = np.concatenate((obs_planes, obs_ut, obs_at, self.advice_cache), axis=1)
+        if self.prior:
+            if self.rdf2vec:
+                self.advice_cache = np.where(obs[[3]].T > 0, self.advice_cache, np.zeros_like(self.advice_cache))
+                obs_ut = self._ids_to_graph(obs[3] - 1, self.uts_map)
+                obs_at = self._ids_to_graph(np.where(obs[3] > 0, obs[4], -1), self.ats_map)
+                obs_planes = np.concatenate((obs_planes, obs_ut, obs_at, self.advice_cache), axis=1)
+            elif self.advice_encode:
+                obs_planes = np.where(obs[[3]].T > 0, obs_planes, np.concatenate((obs_planes[:, :29], np.zeros_like(obs_planes[:, 29:])), axis=1))
+            else:
+                self.advice_cache = np.where(obs[[3]].T > 0, self.advice_cache, np.zeros_like(self.advice_cache))
+                obs_planes = np.concatenate((obs_planes, self.advice_cache), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
     @staticmethod
@@ -342,6 +361,10 @@ class MicroRTSGridModeVecEnv:
         unit = unit - 1
         if unit == -1:
             return None
+        if obs_ij[2] != 1:
+            return None
+        if obs_ij[4] != 0:
+            return None
 
         neighbours, directions = self._get_neighbours(obs, i, j)
         neighbours_relation = self._relation(obs_ij, neighbours)
@@ -353,28 +376,43 @@ class MicroRTSGridModeVecEnv:
         ratings = {}
         actions = []
         for action_node in action_nodes:
+            needs_self, _, _, _ = self._get_prefers(action_node, "needs")
+            continue_ = False
+            for n in needs_self:
+                if self._rate_prefers(obs_ij, n) == 0.:
+                    continue_ = True
+                    break
+            if continue_:
+                continue
+
             prefers_self, prefers_target, prefers_friendly, prefers_enemy = self._get_prefers(action_node)
+
             action_id = self._node_to_id(action_node)
             rating = 0.
 
             produce_type = None
             if action_id == 4:
-                produces = self.graph.objects(rdflib.URIRef(f"http://microrts.com/game/unit/{unit}"), rdflib.URIRef("http://microrts.com/game/unit/produces"))
+                produces = list(self.graph.objects(rdflib.URIRef(f"http://microrts.com/game/unit/{unit}"), rdflib.URIRef("http://microrts.com/game/unit/produces")))
                 action_ratings = list(self.graph.objects(action_node, rdflib.URIRef("http://microrts.com/game/action/describedByInCreates")))
-                max_produce_rating = float("-inf")
+                produce_types = []
+                produce_ratings = []
                 for p in produces:
+                    cost = int(self.graph.value(subject=p, predicate=rdflib.URIRef("http://microrts.com/game/unit/hasCost")))
+                    if cost > self.estimated_resources:
+                        continue
                     unit_ratings = self.graph.objects(p, rdflib.URIRef("http://microrts.com/game/unit/ranks"))
                     ranks = list(set(action_ratings) & set(unit_ratings))
                     r = 0.
                     for rank in ranks:
-                        r += 1. if str(rank).endswith("Good") else 0. if str(ranks).endswith("Medium") else -1.
-                    if r > max_produce_rating:
-                        produce_type = [self._node_to_id(p)]
-                        max_produce_rating = r
-                    elif r == max_produce_rating:
-                        produce_type.append(self._node_to_id(p))
-                produce_type = random.choice(produce_type)
-                rating += max_produce_rating
+                        r += 2. if str(rank).endswith("Good") else 1. if str(ranks).endswith("Medium") else 0.
+                    produce_types.append(self._node_to_id(p))
+                    produce_ratings.append(r)
+                if len(produce_types) == 0:
+                    continue
+                produce_types = np.array([produce_types, produce_ratings], dtype=float).T
+                produce_types = self.random_generator.choice(produce_types, p=softmax(produce_ratings))
+                rating += produce_types[1]
+                produce_type = int(produce_types[0])
 
             targets_distance = str(self.graph.value(subject=action_node, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsDistance")))
             targets_player = str(self.graph.value(subject=action_node, predicate=rdflib.URIRef("http://microrts.com/game/action/targetsPlayer")))
@@ -393,7 +431,7 @@ class MicroRTSGridModeVecEnv:
                 actions.append(action)
                 ratings[action.tobytes()] = rating + self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy)
 
-            elif targets_distance == "adjacent" and len(neighbours) > 0:
+            elif targets_distance == "adjacent":
                 targeted_neighbours = neighbours[neighbours_relation == targets_player]
                 targeted_directions = directions[neighbours_relation == targets_player]
                 if len(targeted_neighbours) == 0:
@@ -411,12 +449,12 @@ class MicroRTSGridModeVecEnv:
                         unit_ = produce_type
                     else:
                         raise ValueError("Invalid action with empty target")
-                    aimsAt = list(self.graph.objects(rdflib.URIRef(f"http://microrts.com/game/unit/{unit_}"), rdflib.URIRef("http://microrts.com/game/unit/aimsAt")))
-                    if len(aimsAt) == 0:
+                    aims_at = list(self.graph.objects(rdflib.URIRef(f"http://microrts.com/game/unit/{unit_}"), rdflib.URIRef("http://microrts.com/game/unit/aimsAt")))
+                    if len(aims_at) == 0:
                         raise ValueError("No aimsAt")
                     wants_relation = None
                     wants_unit = None
-                    for a in aimsAt:
+                    for a in aims_at:
                         if_ = self.graph.value(subject=a, predicate=rdflib.URIRef("http://microrts.com/game/unit/if"))
                         if if_ is not None:
                             if_stat = str(self.graph.value(subject=if_, predicate=rdflib.URIRef("http://microrts.com/game/unit/statistic")))
@@ -437,17 +475,31 @@ class MicroRTSGridModeVecEnv:
                     if wants_relation is None:
                         raise ValueError("No aimsAt")
                     targeted_directions_ = []
+                    targeted_distances = []
                     for d in targeted_directions:
-                        closest_units = np.array(self._get_closest_units(obs, i, j, d))
-                        closest_units = closest_units[self._relation(obs_ij, closest_units) == wants_relation]
+                        closest_units, distance = self._get_closest_units(obs, i, j, d, wants_relation, wants_unit)
+                        closest_units = np.array(closest_units)
                         if len(closest_units) == 0:
                             continue
-                        if wants_unit is None or (closest_units[:, 3] - 1 == self._node_to_id(wants_unit)).any():
-                            targeted_directions_.append(d)
+                        targeted_directions_.append(d)
+                        targeted_distances.append(-distance)
                     if len(targeted_directions_) == 0:
-                        targeted_directions = [random.choice(targeted_directions)]
+                        aims_at_default = self.graph.value(subject=rdflib.URIRef(f"http://microrts.com/game/unit/{unit_}"), predicate=rdflib.URIRef("http://microrts.com/game/unit/aimsAtDefault"))
+                        if aims_at_default is not None:
+                            aims_at_default = str(aims_at_default)
+                            targeted_directions_ = []
+                            targeted_distances = []
+                            for d in targeted_directions:
+                                closest_units, distance = self._get_closest_units(obs, i, j, d, aims_at_default)
+                                closest_units = np.array(closest_units)
+                                if len(closest_units) == 0:
+                                    continue
+                                targeted_directions_.append(d)
+                                targeted_distances.append(-distance)
+                    if len(targeted_directions_) == 0:
+                        targeted_directions = [self.random_generator.choice(targeted_directions)]
                     else:
-                        targeted_directions = [random.choice(targeted_directions_)]
+                        targeted_directions = [self.random_generator.choice(targeted_directions_, p=softmax(targeted_distances))]
 
                 for n, d in zip(targeted_neighbours, targeted_directions):
                     action = self._id_to_action(action_id, d, produce_type)
@@ -459,7 +511,23 @@ class MicroRTSGridModeVecEnv:
         if len(actions) == 0:
             raise ValueError("No actions available")
 
-        return max(actions, key=lambda a: ratings[a.tobytes()])
+        p = np.array([ratings[a.tobytes()] for a in actions])
+        p = softmax(p)
+        a = self.random_generator.choice(np.array(actions), p=p)
+
+        if a[0] in [1, 4]:
+            future_pos = self._action_future_pos(a, i, j)
+            obs[5, future_pos[0], future_pos[1]] = 1
+
+            if a[0] == 1:
+                self.future_pos[future_pos[0], future_pos[1]] = int(self.graph.value(subject=rdflib.URIRef(f"http://microrts.com/game/unit/{unit}"), predicate=rdflib.URIRef("http://microrts.com/game/unit/hasMoveTime"))) + 1
+            elif a[0] == 4:
+                self.future_pos[future_pos[0], future_pos[1]] = int(self.graph.value(subject=rdflib.URIRef(f"http://microrts.com/game/unit/{a[5]}"), predicate=rdflib.URIRef("http://microrts.com/game/unit/hasProduceTime"))) + 1
+                self.estimated_resources -= int(self.graph.value(subject=rdflib.URIRef(f"http://microrts.com/game/unit/{a[5]}"), predicate=rdflib.URIRef("http://microrts.com/game/unit/hasCost")))
+        elif a[0] == 3:
+            self.estimated_resources += int(obs_ij[1])
+
+        return a
 
     @staticmethod
     def _node_to_id(node):
@@ -467,7 +535,7 @@ class MicroRTSGridModeVecEnv:
 
     @staticmethod
     def _id_to_action(action_id, param, produce_type):
-        action = np.zeros(7)
+        action = np.zeros(7, dtype=np.int32)
         action[0] = action_id
 
         if param is not None:
@@ -481,32 +549,54 @@ class MicroRTSGridModeVecEnv:
 
         return action
 
+    @staticmethod
+    def _action_future_pos(action, i, j):
+        if action[0] == 1:
+            d = action[1]
+        elif action[0] == 4:
+            d = action[4]
+        else:
+            raise ValueError("No future pos for action")
+        if d == 0:
+            return i - 1, j
+        if d == 1:
+            return i, j + 1
+        if d == 2:
+            return i + 1, j
+        if d == 3:
+            return i, j - 1
+        raise ValueError("Invalid direction")
+
     def _get_neighbours(self, obs, i, j):
         if obs[3, i, j] == 0:
             return np.array([])
         neighbours = []
         directions = []
-        for idx, (x, y) in enumerate([(i - 1, j), (i, j + 1), (i + 1, j), (i, j - 1)]):
-            if 0 <= x < self.height and 0 <= y < self.width and (obs[3, x, y] > 0 or obs[5, x, y] == 0):
-                neighbours.append(obs[:, x, y])
+        for idx, (y, x) in enumerate([(i - 1, j), (i, j + 1), (i + 1, j), (i, j - 1)]):
+            if 0 <= y < self.height and 0 <= x < self.width and (obs[3, y, x] > 0 or obs[5, y, x] == 0):
+                neighbours.append(obs[:, y, x])
                 directions.append(idx)
         return np.array(neighbours), np.array(directions)
 
     def _get_distant_targets(self, obs, i, j, range_, relation):
         if obs[3, i, j] == 0:
             return [], []
+        max_range = int(self.graph.value(subject=rdflib.URIRef(f"http://microrts.com/game/mainGame"), predicate=rdflib.URIRef("http://microrts.com/game/hasMaxAttackRange")))
+        diff = max_range - range_
         targets = []
         relative_pos = []
-        idx = 0
-        for x in range(-range_, range_ + 1):
-            for y in range(-range_, range_ + 1):
-                if not (x == 0 and y == 0) and 0 <= i + x < self.height and 0 <= j + y < self.width and self._relation(obs[:, i, j], np.array([obs[:, i + x, j + y]])) == relation:
-                    targets.append(obs[:, i + x, j + y])
+        idx = (max_range * 2 + 1) * diff + diff
+        for y in range(-range_, range_ + 1):
+            for x in range(-range_, range_ + 1):
+                # xy = idx % (range_*2+1) - range_, int(idx / (range_*2+1)) - range_
+                if not (x == 0 and y == 0) and 0 <= i + y < self.height and 0 <= j + x < self.width and abs(y) + abs(x) <= range_ and self._relation(obs[:, i, j], np.array([obs[:, i + y, j + x]])) == relation:
+                    targets.append(obs[:, i + y, j + x])
                     relative_pos.append(idx)
-                    idx += 1
+                idx += 1
+            idx += diff * 2
         return targets, relative_pos
 
-    def _get_closest_units(self, obs, i, j, direction):
+    def _get_closest_units(self, obs, i, j, direction, relation, unit=None):
         ij = (i, j)
         if direction == 0:
             coord = -1
@@ -526,6 +616,7 @@ class MicroRTSGridModeVecEnv:
             step_idx = 1
         else:
             raise ValueError("Invalid direction")
+        forbidden = np.zeros((self.height, self.width), dtype=np.int32)
         while abs(coord) < self.height + self.width:
             result = []
             for k in range(-abs(coord) + 1, abs(coord)):
@@ -533,12 +624,40 @@ class MicroRTSGridModeVecEnv:
 
                 coords[abs(step_idx - 1)] = ij[abs(step_idx - 1)] + k
                 coords[step_idx] = ij[step_idx] + (abs(coord) - abs(k)) * np.sign(coord)
-                if 0 <= coords[0] < self.height and 0 <= coords[1] < self.width and obs[3, coords[0], coords[1]] > 0:
-                    result.append(obs[:, coords[0], coords[1]])
+
+                if 0 <= coords[0] < self.height and 0 <= coords[1] < self.width:
+                    if abs(coord) > 1:
+                        flag = 0
+                        if k != 0:
+                            coords_prev = coords.copy()
+                            coords_prev[abs(step_idx - 1)] -= np.sign(k)
+                            if forbidden[coords_prev[0], coords_prev[1]] == 1:
+                                flag += 1
+                        else:
+                            flag += 1
+                        if abs(k) != abs(coord) - 1:
+                            coords_prev = coords.copy()
+                            coords_prev[step_idx] -= np.sign(coord)
+                            if forbidden[coords_prev[0], coords_prev[1]] == 1:
+                                flag += 1
+                        else:
+                            flag += 1
+                        if flag == 2:
+                            forbidden[coords[0], coords[1]] = 1
+                            continue
+
+                    rel = self._relation(obs[:, i, j], np.array([obs[:, coords[0], coords[1]]]))
+                    if obs[3, coords[0], coords[1]] > 0:
+                        if rel == relation and (unit is None or obs[3, coords[0], coords[1]] - 1 == self._node_to_id(unit)):
+                            result.append(obs[:, coords[0], coords[1]])
+                        else:
+                            forbidden[coords[0], coords[1]] = 1
+                    elif rel != "empty":
+                        forbidden[coords[0], coords[1]] = 1
             if len(result) > 0:
-                return result
+                return result, abs(coord)
             coord += step
-        return []
+        return [], None
 
     @staticmethod
     def _relation(obs_ij, obs_other):
@@ -549,8 +668,8 @@ class MicroRTSGridModeVecEnv:
                         np.where(obs_other[:, 5] == 0, "empty", "obstacle")
                         )
 
-    def _get_prefers(self, action):
-        prefers = self.graph.objects(action, rdflib.URIRef("http://microrts.com/game/action/prefers"))
+    def _get_prefers(self, action, relation="prefers"):
+        prefers = self.graph.objects(action, rdflib.URIRef(f"http://microrts.com/game/action/{relation}"))
         prefers_self = []
         prefers_target = []
         prefers_friendly = []
@@ -590,9 +709,9 @@ class MicroRTSGridModeVecEnv:
         if value not in ["high", "low"]:
             raise ValueError("Invalid value")
         if statistic == "hp":
-            return 1. if value == self._hp_status(obs_ij) else -1.
+            return 1. if value == self._hp_status(obs_ij) else 0.
         if statistic == "resources":
-            return 1. if value == self._resources_status(obs_ij) else -1.
+            return 1. if value == self._resources_status(obs_ij) else 0.
         raise ValueError("Invalid statistic")
 
     def _rate_prefers_many(self, prefers, related_neighbours):
@@ -610,7 +729,7 @@ class MicroRTSGridModeVecEnv:
         if len(ratings) == 0:
             return r
         for rating in ratings:
-            r += 1. if str(rating).endswith("Good") else 0. if str(rating).endswith("Medium") else -1.
+            r += 2. if str(rating).endswith("Good") else 1. if str(rating).endswith("Medium") else 0.
         return r
 
     def _rate_action_complete(self, action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target=None, target=None):

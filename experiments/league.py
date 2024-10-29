@@ -3,10 +3,10 @@
 import argparse
 import datetime
 import itertools
-import json
 import os
 import random
 import shutil
+import time
 import uuid
 from distutils.util import strtobool
 from enum import Enum
@@ -44,6 +44,8 @@ def parse_args():
         help="the wandb's project name")
     parser.add_argument('--wandb-entity', type=str, default=None,
         help="the entity (team) of wandb's project")
+    parser.add_argument('--seed', type=int, default=1,
+        help='seed of the experiment')
 
     parser.add_argument('--partial-obs', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
         help='if toggled, the game will have partial observability')
@@ -65,14 +67,22 @@ def parse_args():
         help="the maps to do trueskill evaluations")
     parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
         help='if toggled, the observation space will be augmented with prior knowledge using graph embeddings')
+    parser.add_argument('--rdf-only', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='If toggled, no rl model is used, just the rdf advices')
     parser.add_argument('--prior-advice-freq', type=int, default=10,
         help='the number of steps between refreshing the prior advice')
     parser.add_argument('--runs-dir', type=str, default=None,
         help='the path to directory with output runs data')
+    parser.add_argument('--add-dir', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='if toggled, saves everything in a new directory from time')
     # ["randomBiasedAI","workerRushAI","lightRushAI","coacAI"]
     # default=["randomBiasedAI","workerRushAI","lightRushAI","coacAI","randomAI","passiveAI","naiveMCTSAI","mixedBot","rojo","izanagi","tiamat","droplet","guidedRojoA3N"]
     args = parser.parse_args()
     # fmt: on
+
+    if args.add_dir:
+        args.runs_dir = os.path.join(args.runs_dir, str(int(time.time())))
+        os.makedirs(args.runs_dir)
     return args
 
 
@@ -135,7 +145,7 @@ class Outcome(Enum):
 
 
 class Match:
-    def __init__(self, partial_obs: bool, match_up=None, map_path="maps/16x16/basesWorkers16x16A.xml"):
+    def __init__(self, partial_obs: bool, match_up=None, map_path="maps/16x16/basesWorkers16x16A.xml", seed=0):
         # mode 0: rl-ai vs built-in-ai
         # mode 1: rl-ai vs rl-ai
         # mode 2: built-in-ai vs built-in-ai
@@ -195,13 +205,18 @@ class Match:
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
                 prior=args.prior,
+                advice_encode=not args.rdf_only,
                 prior_advice_freq=args.prior_advice_freq,
                 runs_dir=args.runs_dir,
+                seed=args.seed + seed,
             )
-            self.agent = Agent(self.envs).to(self.device)
-            self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
+            self.agent = Agent(self.envs, rdf_only=args.rdf_only).to(self.device)
+            if not args.rdf_only:
+                self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
             self.agent.eval()
         elif mode == 1:
+            if args.rdf_only:
+                raise Exception("rdf_only is not supported in mode 1")
             self.envs = MicroRTSGridModeVecEnv(
                 num_bot_envs=0,
                 num_selfplay_envs=2,
@@ -212,8 +227,10 @@ class Match:
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
                 prior=args.prior,
+                advice_encode=not args.rdf_only,
                 prior_advice_freq=args.prior_advice_freq,
                 runs_dir=args.runs_dir,
+                seed=args.seed + seed,
             )
             self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
@@ -373,6 +390,9 @@ def get_leaderboard_existing_ais(existing_ai_names):
 
 
 if __name__ == "__main__":
+    with open(os.path.join(args.runs_dir, "args.txt"), "w") as f:
+        f.write("|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])))
+
     print(f"evaluation maps is", args.maps)
     existing_ai_names = [item.name for item in AI.select()]
     all_ai_names = set(existing_ai_names + args.evals)
@@ -383,6 +403,7 @@ if __name__ == "__main__":
             ai = AI(name=ai_name, mu=25.0, sigma=8.333333333333334, ai_type=get_ai_type(ai_name))
             ai.save()
 
+    seed_idx = 0
     # case 1: initialize the league with round robin
     if len(existing_ai_names) == 0:
         match_ups = list(itertools.combinations(all_ai_names, 2))
@@ -393,7 +414,8 @@ if __name__ == "__main__":
                     match_up = list(reversed(match_up))
 
                 for index in range(len(args.maps)):
-                    m = Match(args.partial_obs, match_up, args.maps[index])
+                    m = Match(args.partial_obs, match_up, args.maps[index], seed=seed_idx)
+                    seed_idx += 1
                     challenger = AI.get_or_none(name=m.p0)
                     defender = AI.get_or_none(name=m.p1)
 
@@ -461,7 +483,8 @@ if __name__ == "__main__":
                         match_up = list(reversed(match_up))
 
                     for index in range(len(args.maps)):
-                        m = Match(args.partial_obs, match_up, args.maps[index])
+                        m = Match(args.partial_obs, match_up, args.maps[index], seed=seed_idx)
+                        seed_idx += 1
                         challenger = AI.get_or_none(name=m.p0)
                         defender = AI.get_or_none(name=m.p1)
 
@@ -499,7 +522,7 @@ if __name__ == "__main__":
                             ).save()
 
         print("Saving leaderboard csv")
-        get_leaderboard().to_csv(args.output_path, index=False)
+        get_leaderboard().to_csv(os.path.join(args.runs_dir, args.output_path), index=False)
 
     print("=======================")
     print(get_leaderboard())
