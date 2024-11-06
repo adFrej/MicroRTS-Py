@@ -81,7 +81,7 @@ def parse_args():
     # fmt: on
 
     if args.add_dir:
-        args.runs_dir = os.path.join(args.runs_dir, str(int(time.time())))
+        args.runs_dir = os.path.join(args.runs_dir, args.evals[0].replace("/", "_") + "_" + str(int(time.time())))
         os.makedirs(args.runs_dir)
     return args
 

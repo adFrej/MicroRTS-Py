@@ -98,6 +98,8 @@ def parse_args():
         help='the list of maps used during training')
     parser.add_argument('--eval-maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
         help='the list of maps used during evaluation')
+    parser.add_argument('--reward-shaping', type=lambda x: bool(strtobool(x)), default=True, nargs='?', const=True,
+        help='If toggled, reward shaping will be used')
     parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
         help='If toggled, the observation space will be augmented with prior knowledge using graph embeddings')
     parser.add_argument('--walk-depth', type=int, default=6,
@@ -110,6 +112,10 @@ def parse_args():
         help='the length of the kg embedding vector')
     parser.add_argument('--prior-advice-freq', type=int, default=10,
         help='the number of steps between refreshing the prior advice')
+    parser.add_argument('--advice-reward', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='If toggled, uses the advice reward')
+    parser.add_argument('--advice-weight', type=float, default=0.01,
+        help='the weight of the advice reward')
 
     args = parser.parse_args()
     if not args.seed:
@@ -303,6 +309,7 @@ class TrueskillWriter:
         if future.cancelled():
             return
         model_path, output_path = future.result()
+        time.sleep(1)
         league = pd.read_csv(output_path, index_col="name")
         assert model_path in league.index
         model_global_step = int(model_path.split("/")[-1][:-3])
@@ -375,7 +382,10 @@ if __name__ == "__main__":
         + [microrts_ai.lightRushAI for _ in range(min(args.num_bot_envs, 2))]
         + [microrts_ai.workerRushAI for _ in range(min(args.num_bot_envs, 2))],
         map_paths=[args.train_maps[0]],
+        reward_shaping=args.reward_shaping,
         reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
+        reward_prior=args.advice_reward,
+        reward_prior_weight=args.advice_weight,
         cycle_maps=args.train_maps,
         prior=args.prior,
         graph_depth=args.walk_depth,
@@ -593,7 +603,7 @@ if __name__ == "__main__":
                         f"models/{experiment_name}/{global_step}.pt",
                         f"{global_step}.csv",
                         args.eval_maps,
-                        args.prior,
+                        args.prior and not args.advice_reward,
                         args.prior_advice_freq,
                         runs_dir,
                         args.seed,
