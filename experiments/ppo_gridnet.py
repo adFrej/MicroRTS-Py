@@ -112,6 +112,8 @@ def parse_args():
         help='the length of the kg embedding vector')
     parser.add_argument('--prior-advice-freq', type=int, default=10,
         help='the number of steps between refreshing the prior advice')
+    parser.add_argument('--do-advice', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
+        help='If toggled, advices before action')
     parser.add_argument('--advice-reward', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
         help='If toggled, uses the advice reward')
     parser.add_argument('--advice-weight', type=float, default=0.01,
@@ -384,6 +386,7 @@ if __name__ == "__main__":
         map_paths=[args.train_maps[0]],
         reward_shaping=args.reward_shaping,
         reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
+        advice_prior=args.do_advice,
         reward_prior=args.advice_reward,
         reward_prior_weight=args.advice_weight,
         cycle_maps=args.train_maps,

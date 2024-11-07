@@ -4,7 +4,6 @@ import argparse
 import datetime
 import itertools
 import os
-import random
 import shutil
 import time
 import uuid
@@ -205,10 +204,11 @@ class Match:
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
                 prior=args.prior,
+                advice_prior=args.prior,
                 advice_encode=not args.rdf_only,
                 prior_advice_freq=args.prior_advice_freq,
                 runs_dir=args.runs_dir,
-                seed=args.seed + seed,
+                seed=seed,
             )
             self.agent = Agent(self.envs, rdf_only=args.rdf_only).to(self.device)
             if not args.rdf_only:
@@ -227,10 +227,11 @@ class Match:
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
                 prior=args.prior,
+                advice_prior=args.prior,
                 advice_encode=not args.rdf_only,
                 prior_advice_freq=args.prior_advice_freq,
                 runs_dir=args.runs_dir,
-                seed=args.seed + seed,
+                seed=seed,
             )
             self.agent = Agent(self.envs).to(self.device)
             self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
@@ -390,6 +391,8 @@ def get_leaderboard_existing_ais(existing_ai_names):
 
 
 if __name__ == "__main__":
+    random_generator = np.random.default_rng(args.seed)
+
     with open(os.path.join(args.runs_dir, "args.txt"), "w") as f:
         f.write("|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 
@@ -407,14 +410,14 @@ if __name__ == "__main__":
     # case 1: initialize the league with round robin
     if len(existing_ai_names) == 0:
         match_ups = list(itertools.combinations(all_ai_names, 2))
-        np.random.shuffle(match_ups)
+        random_generator.shuffle(match_ups)
         for idx in range(2):  # switch player 1 and 2's starting locations
             for match_up in match_ups:
                 if idx == 0:
                     match_up = list(reversed(match_up))
 
                 for index in range(len(args.maps)):
-                    m = Match(args.partial_obs, match_up, args.maps[index], seed=seed_idx)
+                    m = Match(args.partial_obs, match_up, args.maps[index], seed=args.seed + seed_idx)
                     seed_idx += 1
                     challenger = AI.get_or_none(name=m.p0)
                     defender = AI.get_or_none(name=m.p1)
@@ -473,7 +476,7 @@ if __name__ == "__main__":
 
                 # run a match if the quality of the opponent is high enough
                 top_3_ai = [item[0] for item in match_qualities[:3]]
-                opponent_ai = random.choice(top_3_ai)
+                opponent_ai = random_generator.choice(top_3_ai)
                 match_up = (ai.name, opponent_ai.name)
                 match_quality = quality_1vs1(ai, opponent_ai)
                 print(f"the match up is ({ai}, {opponent_ai}), quality is {round(match_quality, 4)}")
@@ -483,7 +486,7 @@ if __name__ == "__main__":
                         match_up = list(reversed(match_up))
 
                     for index in range(len(args.maps)):
-                        m = Match(args.partial_obs, match_up, args.maps[index], seed=seed_idx)
+                        m = Match(args.partial_obs, match_up, args.maps[index], seed=args.seed + seed_idx)
                         seed_idx += 1
                         challenger = AI.get_or_none(name=m.p0)
                         defender = AI.get_or_none(name=m.p1)
