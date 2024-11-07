@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="league_rdf_only" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="league_model" type="PythonConfigurationType" factoryName="Python">
     <module name="kg-rl-rts" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
@@ -13,7 +13,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/MicroRTS-Py/experiments/league.py" />
-    <option name="PARAMETERS" value="--exp-name kg9 --evals rdf_only.pt --update-db false --output-path scores.csv --model-type ppo_gridnet --prior --prior-mode rdf_only --prior-advice-freq 1 --runs-dir runs/MicroRTSGridModeVecEnv__ppo_gridnet__rdf_only --add-dir --seed 4" />
+    <option name="PARAMETERS" value="--exp-name kg9 --evals models/MicroRTSGridModeVecEnv__ppo_gridnet__prior__kg9__64__1730911026/9670656.pt --update-db false --output-path scores.csv --model-type ppo_gridnet --runs-dir runs/MicroRTSGridModeVecEnv__ppo_gridnet__evals --add-dir --seed 0" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />

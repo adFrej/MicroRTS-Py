@@ -50,6 +50,12 @@ class MicroRTSGridModeVecEnv:
     :param env: gym3 environment to adapt
     """
 
+    prior_mode_append_encoded = "append_encoded"
+    prior_mode_append_raw = "append_raw"
+    prior_mode_reward_advice = "reward_advice"
+    prior_mode_reward_shaping = "reward_shaping"
+    prior_mode_rdf2vec = "rdf2vec"  # deprecated
+
     def __init__(
         self,
         num_selfplay_envs,
@@ -62,20 +68,17 @@ class MicroRTSGridModeVecEnv:
         map_paths=["maps/10x10/basesTwoWorkers10x10.xml"],
         reward_shaping=True,
         reward_weight=np.array([0.0, 1.0, 0.0, 0.0, 0.0, 5.0]),
-        advice_prior=False,
-        reward_prior=False,
-        reward_prior_weight=0.01,
         cycle_maps=[],
         autobuild=False,
         jvm_args=[],
         prior=False,
-        rdf2vec=False,
-        advice_encode=True,
+        prior_mode="append_encoded",  # append_encoded, append_raw, reward_advice, reward_shaping, rdf2vec
+        reward_prior_weight=0.01,
+        prior_advice_freq=1,
         graph_depth=6,
         graph_walks=None,
         graph_reverse=False,
         graph_vector_length=64,
-        prior_advice_freq=10,
         seed=1,
         runs_dir=".",
         graph_map_file="grap_map.json",
@@ -174,13 +177,12 @@ class MicroRTSGridModeVecEnv:
         self.step_obs = [0] * self.num_envs
         self.prior = prior
         if self.prior:
-            self.advice_prior = advice_prior
-            self.reward_prior = reward_prior
-            if reward_prior:
+            if prior_mode not in [self.prior_mode_append_encoded, self.prior_mode_append_raw, self.prior_mode_reward_advice, self.prior_mode_reward_shaping, self.prior_mode_rdf2vec]:
+                raise ValueError("Invalid prior mode")
+            self.prior_mode = prior_mode
+            if self.prior_mode in [self.prior_mode_reward_advice, self.prior_mode_reward_shaping]:
                 self.reward_weight = np.concatenate((self.reward_weight, np.array([reward_prior_weight])))
-            self.rdf2vec = rdf2vec if not reward_prior else False
-            self.advice_encode = advice_encode if not reward_prior else False
-            if not os.path.exists(os.path.join(runs_dir, graph_map_file)):
+            if not os.path.exists(os.path.join(runs_dir, graph_ttl_file)):
                 from rts import GameGraph
                 gg = GameGraph()
                 gg.processUnitTypeTable(self.real_utt)
@@ -195,7 +197,7 @@ class MicroRTSGridModeVecEnv:
                                            "object": [t[2] for t in triples]}, dtype=str)
                 df_triples.to_csv(os.path.join(runs_dir, graph_triples_file), index=False, header=False)
 
-                if self.rdf2vec:
+                if self.prior_mode == self.prior_mode_rdf2vec:
                     uts = [str(t) for t in gg.getUnitTypes()]
                     ats = [str(t) for t in gg.getActionTypes()]
 
@@ -233,7 +235,7 @@ class MicroRTSGridModeVecEnv:
                     self.uts_map = uts_map
                     self.ats_map = ats_map
             else:
-                if self.rdf2vec:
+                if self.prior_mode == self.prior_mode_rdf2vec:
                     with open(os.path.join(runs_dir, graph_map_file), "r") as f:
                         self.graph_map = {k: np.array(v) for k, v in json.load(f).items()}
                     self.uts_map = {int(k.split("_")[-1]): v for k, v in self.graph_map.items() if k.startswith("unitType_")}
@@ -246,7 +248,8 @@ class MicroRTSGridModeVecEnv:
             self.graph.parse(data=gg_str, format="turtle")
             self.advice_freq = prior_advice_freq
             self.advice_cache = [None for _ in range(self.num_envs)]
-            self.obs_cache = [None for _ in range(self.num_envs)]
+            if self.prior_mode == self.prior_mode_reward_shaping:
+                self.obs_cache = [None for _ in range(self.num_envs)]
             self.random_generator = np.random.default_rng(seed)
 
         # computed properties
@@ -255,13 +258,13 @@ class MicroRTSGridModeVecEnv:
 
         self.action_space_dims = [6, 4, 4, 4, 4, len(self.utt["unitTypes"]), 7 * 7]
         self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2]
-        if self.prior and not self.rdf2vec and self.advice_encode:
+        if self.prior and self.prior_mode == self.prior_mode_append_encoded:
             self.num_planes += self.action_space_dims
         if partial_obs:
             self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2, 2]  # 2 extra for visibility
         obs_length = sum(self.num_planes)
-        obs_length += len(self.graph_map["mainGame"]) * 3 if self.prior and self.rdf2vec else 0
-        obs_length += 7 if self.prior and not self.advice_encode and not self.reward_prior else 0
+        obs_length += len(self.graph_map["mainGame"]) * 3 if self.prior and self.prior_mode == self.prior_mode_rdf2vec else 0
+        obs_length += 7 if self.prior and self.prior_mode == self.prior_mode_append_raw else 0
         self.observation_space = gym.spaces.Box(
             low=0.0, high=1.0, shape=(self.height, self.width, obs_length), dtype=np.int32
         )
@@ -305,7 +308,7 @@ class MicroRTSGridModeVecEnv:
         return np.array(obs)
 
     def _encode_obs(self, obs, idx):
-        do_advices = self.prior and self.advice_prior and self.step_obs[idx] % self.advice_freq == 0
+        do_advices = self.prior and self.prior_mode in [self.prior_mode_append_encoded, self.prior_mode_append_raw, self.prior_mode_reward_advice, self.prior_mode_rdf2vec] and self.step_obs[idx] % self.advice_freq == 0
         self.step_obs[idx] += 1
 
         # unitTypesMatrix is obs[3]
@@ -319,17 +322,17 @@ class MicroRTSGridModeVecEnv:
             for i in indexes:
                 advices[i] = self._advise_action(i // self.width, i % self.width, obs)
             obs[5] = obs_5
-            if self.rdf2vec:
+            if self.prior_mode == self.prior_mode_rdf2vec:
                 advices = self._ids_to_graph(advices, self.ats_map)
-            elif self.advice_encode:
+            elif self.prior_mode == self.prior_mode_append_encoded:
                 advices = advices.reshape(self.height, self.width, -1)
                 advices = np.transpose(advices, (2, 0, 1))
             self.advice_cache[idx] = advices
 
-        if self.prior and not self.advice_prior and self.reward_prior:
+        if self.prior and self.prior_mode == self.prior_mode_reward_shaping:
             self.obs_cache[idx] = obs
 
-        if self.prior and self.advice_prior and not self.rdf2vec and self.advice_encode:
+        if self.prior and self.prior_mode == self.prior_mode_append_encoded:
             # self.advice_cache[idx] = np.where(obs[[3]] > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
             obs = np.concatenate((obs, self.advice_cache[idx]), axis=0)
         obs = obs.reshape(len(obs), -1).clip(0, np.array([self.num_planes]).T - 1)
@@ -341,18 +344,17 @@ class MicroRTSGridModeVecEnv:
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
 
         if self.prior:
-            if self.advice_prior:
-                if self.rdf2vec:
-                    self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-                    obs_ut = self._ids_to_graph(obs[3] - 1, self.uts_map)
-                    obs_at = self._ids_to_graph(np.where(obs[3] > 0, obs[4], -1), self.ats_map)
-                    obs_planes = np.concatenate((obs_planes, obs_ut, obs_at, self.advice_cache[idx]), axis=1)
-                elif self.advice_encode:
-                    obs_planes = np.where(obs[[3]].T > 0, obs_planes, np.concatenate((obs_planes[:, :29], np.zeros_like(obs_planes[:, 29:])), axis=1))
-                else:
-                    self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-                    if not self.reward_prior:
-                        obs_planes = np.concatenate((obs_planes, self.advice_cache[idx]), axis=1)
+            if self.prior_mode == self.prior_mode_rdf2vec:
+                self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
+                obs_ut = self._ids_to_graph(obs[3] - 1, self.uts_map)
+                obs_at = self._ids_to_graph(np.where(obs[3] > 0, obs[4], -1), self.ats_map)
+                obs_planes = np.concatenate((obs_planes, obs_ut, obs_at, self.advice_cache[idx]), axis=1)
+            elif self.prior_mode == self.prior_mode_append_encoded:
+                obs_planes = np.where(obs[[3]].T > 0, obs_planes, np.concatenate((obs_planes[:, :29], np.zeros_like(obs_planes[:, 29:])), axis=1))
+            elif self.prior_mode in [self.prior_mode_append_raw, self.prior_mode_reward_advice]:
+                self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
+                if self.prior_mode == self.prior_mode_append_raw:
+                    obs_planes = np.concatenate((obs_planes, self.advice_cache[idx]), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
     @staticmethod
@@ -972,7 +974,7 @@ class MicroRTSGridModeVecEnv:
 
     def step_async(self, actions):
         actions = actions.reshape((self.num_envs, self.width * self.height, -1))
-        if self.prior and self.reward_prior:
+        if self.prior and self.prior_mode in [self.prior_mode_reward_advice, self.prior_mode_reward_shaping]:
             self.actions_np = np.where(np.repeat((self.source_unit_mask == 1)[:, :, np.newaxis], 7, axis=2), actions, np.zeros_like(actions) - 1)
         actions = np.concatenate((self.source_unit_idxs, actions), 2)  # specify source unit
         # valid actions
@@ -1009,8 +1011,8 @@ class MicroRTSGridModeVecEnv:
         if not self.reward_shaping:
             reward[:, 1:] = 0
 
-        if self.prior and self.reward_prior:
-            if self.advice_prior:
+        if self.prior:
+            if self.prior_mode == self.prior_mode_reward_advice:
                 advices = np.array(self.advice_cache)
                 reward_prior = np.where(self.actions_np[:, :, 0] == advices[:, :, 0], 1, 0)
                 param_pos = self._actions_to_pos_fast(self.actions_np[:, :, 0])
@@ -1024,7 +1026,7 @@ class MicroRTSGridModeVecEnv:
                 # reward_prior[np.isnan(reward_prior)] = 0.
                 reward_prior = reward_prior.sum(axis=1)
                 reward = np.concatenate((reward, reward_prior.reshape(-1, 1)), axis=1)
-            else:
+            elif self.prior_mode == self.prior_mode_reward_shaping:
                 reward_prior = [0] * self.num_envs
                 actions = np.concatenate((self.source_unit_idxs, self.actions_np), 2)
                 for idx in range(self.num_envs):
