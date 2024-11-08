@@ -100,22 +100,12 @@ def parse_args():
         help='the list of maps used during evaluation')
     parser.add_argument('--reward-shaping', type=lambda x: bool(strtobool(x)), default=True, nargs='?', const=True,
         help='If toggled, reward shaping will be used')
-    parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
-        help='If toggled, the observation space will be augmented with prior knowledge using graph embeddings')
-    parser.add_argument('--prior-mode', type=str, default="append_encoded", choices=['append_encoded', 'append_raw', 'reward_advice', 'reward_shaping', 'rdf2vec'],
-        help="the prior training mode, one of ['append_encoded' 'append_raw' 'reward_advice' 'reward_shaping' 'rdf2vec']")
+    parser.add_argument('--prior', type=str, default="none", choices=["none", "append_encoded", "append_raw", "reward_advice", "reward_shaping"],
+        help="the prior bias mode, one of ['none', 'append_encoded', 'append_raw', 'reward_advice', 'reward_shaping']")
     parser.add_argument('--reward-prior-weight', type=float, default=0.01,
         help='the weight of the prior reward')
     parser.add_argument('--prior-advice-freq', type=int, default=1,
         help='the number of steps between refreshing the prior advice')
-    parser.add_argument('--walk-depth', type=int, default=6,
-        help='the depth of the prior graph walk measured in the number of relations')
-    parser.add_argument('--walk-number', type=int, default=None,
-        help='the total number of walks')
-    parser.add_argument('--walk-reverse', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
-        help='If toggled, extracts children\'s and parents\' walks of the entity')
-    parser.add_argument('--kg-vector-length', type=int, default=64,
-        help='the length of the kg embedding vector')
 
     args = parser.parse_args()
     if not args.seed:
@@ -262,7 +252,7 @@ class Agent(nn.Module):
         return self.critic(self.encoder(x))
 
 
-def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: bool = False, prior_mode: str = "append_encoded", prior_advice_freq: int = 10, runs_dir: str = None, seed: int = 1):
+def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prior: str = "none", prior_advice_freq: int = 1, runs_dir: str = None, seed: int = 1):
     args = [
         "python",
         "league.py",
@@ -279,9 +269,7 @@ def run_evaluation(model_path: str, output_path: str, eval_maps: List[str], prio
         "--maps",
         *eval_maps,
         "--prior",
-        str(prior),
-        "--prior-mode",
-        prior_mode,
+        prior,
         "--prior-advice-freq",
         str(prior_advice_freq),
         "--runs-dir",
@@ -387,14 +375,9 @@ if __name__ == "__main__":
         reward_shaping=args.reward_shaping,
         reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
         cycle_maps=args.train_maps,
-        prior=args.prior,
-        prior_mode=args.prior_mode,
+        prior_mode=args.prior,
         reward_prior_weight=args.reward_prior_weight,
         prior_advice_freq=args.prior_advice_freq,
-        graph_depth=args.walk_depth,
-        graph_walks=args.walk_number,
-        graph_reverse=args.walk_reverse,
-        graph_vector_length=args.kg_vector_length,
         seed=args.seed,
         runs_dir=runs_dir,
     )
@@ -605,8 +588,7 @@ if __name__ == "__main__":
                         f"models/{experiment_name}/{global_step}.pt",
                         f"{global_step}.csv",
                         args.eval_maps,
-                        args.prior and args.prior_mode in [MicroRTSGridModeVecEnv.prior_mode_append_encoded, MicroRTSGridModeVecEnv.prior_mode_append_raw, MicroRTSGridModeVecEnv.prior_mode_rdf2vec],
-                        args.prior_mode if args.prior_mode in [MicroRTSGridModeVecEnv.prior_mode_append_encoded, MicroRTSGridModeVecEnv.prior_mode_append_raw, MicroRTSGridModeVecEnv.prior_mode_rdf2vec] else "append_encoded",
+                        args.prior if MicroRTSGridModeVecEnv.PriorMode(args.prior).is_append else MicroRTSGridModeVecEnv.PriorMode.NONE.value,
                         args.prior_advice_freq,
                         runs_dir,
                         args.seed,

@@ -5,6 +5,7 @@ import sys
 import traceback
 import warnings
 import xml.etree.ElementTree as ET
+from enum import Enum
 from itertools import cycle
 
 import gym
@@ -19,12 +20,6 @@ from jpype.types import JArray, JInt
 from PIL import Image
 
 import gym_microrts
-
-from pyrdf2vec import RDF2VecTransformer
-from pyrdf2vec.graphs import KG
-from pyrdf2vec.walkers import RandomWalker
-
-from gym_microrts.word_2_vec_preprocessing import Word2VecPreprocessing, process_graph_entity
 
 MICRORTS_CLONE_MESSAGE = """
 WARNING: the repository does not include the microrts git submodule.
@@ -50,11 +45,43 @@ class MicroRTSGridModeVecEnv:
     :param env: gym3 environment to adapt
     """
 
-    prior_mode_append_encoded = "append_encoded"
-    prior_mode_append_raw = "append_raw"
-    prior_mode_reward_advice = "reward_advice"
-    prior_mode_reward_shaping = "reward_shaping"
-    prior_mode_rdf2vec = "rdf2vec"  # deprecated
+    class PriorMode(Enum):
+        NONE = "none"
+        APPEND_ENCODED = "append_encoded"
+        APPEND_RAW = "append_raw"
+        REWARD_ADVICE = "reward_advice"
+        REWARD_SHAPING = "reward_shaping"
+
+        def __bool__(self):
+            return self != self.NONE
+
+        @property
+        def is_append_encoded(self):
+            return self is self.APPEND_ENCODED
+
+        @property
+        def is_append_raw(self):
+            return self is self.APPEND_RAW
+
+        @property
+        def is_reward_advice(self):
+            return self is self.REWARD_ADVICE
+
+        @property
+        def is_reward_shaping(self):
+            return self is self.REWARD_SHAPING
+
+        @property
+        def is_append(self):
+            return self.is_append_encoded or self.is_append_raw
+
+        @property
+        def is_reward(self):
+            return self.is_reward_advice or self.is_reward_shaping
+
+        @property
+        def uses_advices(self):
+            return self.is_append or self.is_reward_advice
 
     def __init__(
         self,
@@ -71,17 +98,11 @@ class MicroRTSGridModeVecEnv:
         cycle_maps=[],
         autobuild=False,
         jvm_args=[],
-        prior=False,
-        prior_mode="append_encoded",  # append_encoded, append_raw, reward_advice, reward_shaping, rdf2vec
+        prior_mode="none",  # none, append_encoded, append_raw, reward_advice, reward_shaping
         reward_prior_weight=0.01,
         prior_advice_freq=1,
-        graph_depth=6,
-        graph_walks=None,
-        graph_reverse=False,
-        graph_vector_length=64,
         seed=1,
         runs_dir=".",
-        graph_map_file="grap_map.json",
         graph_ttl_file="graph.ttl",
         graph_triples_file="triples.tsv",
     ):
@@ -174,13 +195,10 @@ class MicroRTSGridModeVecEnv:
         )
         self.start_client()
 
-        self.step_obs = [0] * self.num_envs
-        self.prior = prior
-        if self.prior:
-            if prior_mode not in [self.prior_mode_append_encoded, self.prior_mode_append_raw, self.prior_mode_reward_advice, self.prior_mode_reward_shaping, self.prior_mode_rdf2vec]:
-                raise ValueError("Invalid prior mode")
-            self.prior_mode = prior_mode
-            if self.prior_mode in [self.prior_mode_reward_advice, self.prior_mode_reward_shaping]:
+        self.prior_mode = self.PriorMode(prior_mode)
+        if self.prior_mode:
+            self.step_obs = [0] * self.num_envs
+            if self.prior_mode.is_reward:
                 self.reward_weight = np.concatenate((self.reward_weight, np.array([reward_prior_weight])))
             if not os.path.exists(os.path.join(runs_dir, graph_ttl_file)):
                 from rts import GameGraph
@@ -196,59 +214,16 @@ class MicroRTSGridModeVecEnv:
                                            "predicate": [t[1] for t in triples],
                                            "object": [t[2] for t in triples]}, dtype=str)
                 df_triples.to_csv(os.path.join(runs_dir, graph_triples_file), index=False, header=False)
-
-                if self.prior_mode == self.prior_mode_rdf2vec:
-                    uts = [str(t) for t in gg.getUnitTypes()]
-                    ats = [str(t) for t in gg.getActionTypes()]
-
-                    if graph_reverse:
-                        graph_depth //= 2
-                        graph_walks = int((graph_walks/(1 + len(uts) + len(ats)))**(1/2)) if graph_walks is not None else None # sth wrong
-                    else:
-                        graph_walks = graph_walks//(1 + len(uts) + len(ats)) if graph_walks is not None else None
-
-                    kg = KG(os.path.join(runs_dir, graph_ttl_file))
-                    walkers = [RandomWalker(
-                        max_depth=graph_depth,
-                        max_walks=graph_walks,
-                        with_reverse=graph_reverse,
-                        random_state=seed,
-                        n_jobs=6,
-                        md5_bytes=None)]
-
-                    embeddings, literals = RDF2VecTransformer(
-                        walkers=walkers,
-                        embedder=Word2VecPreprocessing(processor=process_graph_entity, vector_size=graph_vector_length, workers=1),
-                        verbose=1,
-                    ).fit_transform(kg, ["http://microrts.com/game/mainGame"] + uts + ats)
-                    uts_map = {int(ut.split('/')[-1]): emb for ut, emb in zip(uts, embeddings[1:len(uts) + 1])}
-                    uts_map[-1] = np.zeros(embeddings[0].shape[0])
-                    ats_map = {int(at.split('/')[-1]): emb for at, emb in zip(ats, embeddings[len(uts) + 1:])}
-                    ats_map[-1] = np.zeros(embeddings[0].shape[0])
-                    self.graph_map = {
-                        "mainGame": embeddings[0],
-                        **{f"unitType_{k}": v for k, v in uts_map.items()},
-                        **{f"actionType_{k}": v for k, v in ats_map.items()},
-                    }
-                    with open(os.path.join(runs_dir, graph_map_file), "w") as f:
-                        f.write(json.dumps({k: v.tolist() for k, v in self.graph_map.items()}, indent=4))
-                    self.uts_map = uts_map
-                    self.ats_map = ats_map
             else:
-                if self.prior_mode == self.prior_mode_rdf2vec:
-                    with open(os.path.join(runs_dir, graph_map_file), "r") as f:
-                        self.graph_map = {k: np.array(v) for k, v in json.load(f).items()}
-                    self.uts_map = {int(k.split("_")[-1]): v for k, v in self.graph_map.items() if k.startswith("unitType_")}
-                    self.ats_map = {int(k.split("_")[-1]): v for k, v in self.graph_map.items() if k.startswith("actionType_")}
-
                 with open(os.path.join(runs_dir, graph_ttl_file), "r") as f:
                     gg_str = f.read()
 
             self.graph = rdflib.Graph()
             self.graph.parse(data=gg_str, format="turtle")
             self.advice_freq = prior_advice_freq
-            self.advice_cache = [None for _ in range(self.num_envs)]
-            if self.prior_mode == self.prior_mode_reward_shaping:
+            if self.prior_mode.uses_advices:
+                self.advice_cache = [None for _ in range(self.num_envs)]
+            if self.prior_mode.is_reward_shaping:
                 self.obs_cache = [None for _ in range(self.num_envs)]
             self.random_generator = np.random.default_rng(seed)
 
@@ -258,13 +233,12 @@ class MicroRTSGridModeVecEnv:
 
         self.action_space_dims = [6, 4, 4, 4, 4, len(self.utt["unitTypes"]), 7 * 7]
         self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2]
-        if self.prior and self.prior_mode == self.prior_mode_append_encoded:
+        if self.prior_mode.is_append_encoded:
             self.num_planes += self.action_space_dims
         if partial_obs:
             self.num_planes = [5, 5, 3, len(self.utt["unitTypes"]) + 1, 6, 2, 2]  # 2 extra for visibility
         obs_length = sum(self.num_planes)
-        obs_length += len(self.graph_map["mainGame"]) * 3 if self.prior and self.prior_mode == self.prior_mode_rdf2vec else 0
-        obs_length += 7 if self.prior and self.prior_mode == self.prior_mode_append_raw else 0
+        obs_length += 7 if self.prior_mode.is_append_raw else 0
         self.observation_space = gym.spaces.Box(
             low=0.0, high=1.0, shape=(self.height, self.width, obs_length), dtype=np.int32
         )
@@ -308,33 +282,31 @@ class MicroRTSGridModeVecEnv:
         return np.array(obs)
 
     def _encode_obs(self, obs, idx):
-        do_advices = self.prior and self.prior_mode in [self.prior_mode_append_encoded, self.prior_mode_append_raw, self.prior_mode_reward_advice, self.prior_mode_rdf2vec] and self.step_obs[idx] % self.advice_freq == 0
-        self.step_obs[idx] += 1
+        if self.prior_mode.uses_advices:
+            do_advices = self.step_obs[idx] % self.advice_freq == 0
+            self.step_obs[idx] += 1
 
-        # unitTypesMatrix is obs[3]
-        # actionTypesMatrix is obs[4]
-        if do_advices:
-            obs_5 = obs[5].copy()
-            obs_flat = obs.transpose((1, 2, 0)).reshape(-1, obs.shape[0])
-            cond = (obs_flat[:, 3] > 0) & (obs_flat[:, 2] == 1) & (obs_flat[:, 4] == 0)
-            indexes = np.arange(obs_flat.shape[0])[cond]
-            advices = np.zeros((obs_flat.shape[0], 7), dtype=np.int32)
-            for i in indexes:
-                advices[i] = self._advise_action(i // self.width, i % self.width, obs)
-            obs[5] = obs_5
-            if self.prior_mode == self.prior_mode_rdf2vec:
-                advices = self._ids_to_graph(advices, self.ats_map)
-            elif self.prior_mode == self.prior_mode_append_encoded:
-                advices = advices.reshape(self.height, self.width, -1)
-                advices = np.transpose(advices, (2, 0, 1))
-            self.advice_cache[idx] = advices
+            if do_advices:
+                obs_5 = obs[5].copy()
+                obs_flat = obs.transpose((1, 2, 0)).reshape(-1, obs.shape[0])
+                cond = (obs_flat[:, 3] > 0) & (obs_flat[:, 2] == 1) & (obs_flat[:, 4] == 0)
+                indexes = np.arange(obs_flat.shape[0])[cond]
+                advices = np.zeros((obs_flat.shape[0], 7), dtype=np.int32)
+                for i in indexes:
+                    advices[i] = self._advise_action(i // self.width, i % self.width, obs)
+                obs[5] = obs_5
+                if self.prior_mode.is_append_encoded:
+                    advices = advices.reshape(self.height, self.width, -1)
+                    advices = np.transpose(advices, (2, 0, 1))
+                self.advice_cache[idx] = advices
 
-        if self.prior and self.prior_mode == self.prior_mode_reward_shaping:
+            if self.prior_mode.is_append_encoded:
+                # self.advice_cache[idx] = np.where(obs[[3]] > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
+                obs = np.concatenate((obs, self.advice_cache[idx]), axis=0)
+
+        if self.prior_mode.is_reward_shaping:
             self.obs_cache[idx] = obs
 
-        if self.prior and self.prior_mode == self.prior_mode_append_encoded:
-            # self.advice_cache[idx] = np.where(obs[[3]] > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-            obs = np.concatenate((obs, self.advice_cache[idx]), axis=0)
         obs = obs.reshape(len(obs), -1).clip(0, np.array([self.num_planes]).T - 1)
         obs_planes = np.zeros((self.height * self.width, self.num_planes_prefix_sum[-1]), dtype=np.int32)
         obs_planes_idx = np.arange(len(obs_planes))
@@ -343,18 +315,12 @@ class MicroRTSGridModeVecEnv:
         for i in range(1, self.num_planes_len):
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
 
-        if self.prior:
-            if self.prior_mode == self.prior_mode_rdf2vec:
-                self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-                obs_ut = self._ids_to_graph(obs[3] - 1, self.uts_map)
-                obs_at = self._ids_to_graph(np.where(obs[3] > 0, obs[4], -1), self.ats_map)
-                obs_planes = np.concatenate((obs_planes, obs_ut, obs_at, self.advice_cache[idx]), axis=1)
-            elif self.prior_mode == self.prior_mode_append_encoded:
+        if self.prior_mode.uses_advices:
+            self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
+            if self.prior_mode.is_append_encoded:
                 obs_planes = np.where(obs[[3]].T > 0, obs_planes, np.concatenate((obs_planes[:, :29], np.zeros_like(obs_planes[:, 29:])), axis=1))
-            elif self.prior_mode in [self.prior_mode_append_raw, self.prior_mode_reward_advice]:
-                self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-                if self.prior_mode == self.prior_mode_append_raw:
-                    obs_planes = np.concatenate((obs_planes, self.advice_cache[idx]), axis=1)
+            elif self.prior_mode.is_append_raw:
+                obs_planes = np.concatenate((obs_planes, self.advice_cache[idx]), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
     @staticmethod
@@ -974,7 +940,7 @@ class MicroRTSGridModeVecEnv:
 
     def step_async(self, actions):
         actions = actions.reshape((self.num_envs, self.width * self.height, -1))
-        if self.prior and self.prior_mode in [self.prior_mode_reward_advice, self.prior_mode_reward_shaping]:
+        if self.prior_mode.is_reward:
             self.actions_np = np.where(np.repeat((self.source_unit_mask == 1)[:, :, np.newaxis], 7, axis=2), actions, np.zeros_like(actions) - 1)
         actions = np.concatenate((self.source_unit_idxs, actions), 2)  # specify source unit
         # valid actions
@@ -1011,34 +977,33 @@ class MicroRTSGridModeVecEnv:
         if not self.reward_shaping:
             reward[:, 1:] = 0
 
-        if self.prior:
-            if self.prior_mode == self.prior_mode_reward_advice:
-                advices = np.array(self.advice_cache)
-                reward_prior = np.where(self.actions_np[:, :, 0] == advices[:, :, 0], 1, 0)
-                param_pos = self._actions_to_pos_fast(self.actions_np[:, :, 0])
-                reward_prior += np.where((reward_prior == 1) & (np.take_along_axis(self.actions_np, param_pos, axis=2) == np.take_along_axis(advices, param_pos, axis=2)).all(axis=2), 3, 0)
-                # reward_prior += np.where((self.actions_np[:, :, :] == advices[:, :, :]).all(axis=2), 1, 0)
-                # reward_prior = np.where(advices[:, :, 0] == 0, 0, reward_prior)
-                # with warnings.catch_warnings():
-                #     warnings.filterwarnings("ignore", message="Mean of empty slice")
-                #     warnings.filterwarnings("ignore", message="invalid value encountered in true_divide")
-                #     reward_prior = reward_prior.mean(axis=1, where=(self.actions_np[:, :, 0] != -1))
-                # reward_prior[np.isnan(reward_prior)] = 0.
-                reward_prior = reward_prior.sum(axis=1)
-                reward = np.concatenate((reward, reward_prior.reshape(-1, 1)), axis=1)
-            elif self.prior_mode == self.prior_mode_reward_shaping:
-                reward_prior = [0] * self.num_envs
-                actions = np.concatenate((self.source_unit_idxs, self.actions_np), 2)
-                for idx in range(self.num_envs):
-                    for action in actions[idx][actions[idx][:, 1] != -1]:
-                        try:
-                            reward_prior[idx] += self._reward_action(action[0] // self.width, action[0] % self.width, self.obs_cache[idx], action[1:])
-                        except ValueError as e:
-                            if str(e) == "Forbidden action":
-                                print("Forbidden action!!!\n", traceback.format_exc())
-                            else:
-                                raise
-                reward = np.concatenate((reward, np.array(reward_prior).reshape(-1, 1)), axis=1)
+        if self.prior_mode.is_reward_advice:
+            advices = np.array(self.advice_cache)
+            reward_prior = np.where(self.actions_np[:, :, 0] == advices[:, :, 0], 1, 0)
+            param_pos = self._actions_to_pos_fast(self.actions_np[:, :, 0])
+            reward_prior += np.where((reward_prior == 1) & (np.take_along_axis(self.actions_np, param_pos, axis=2) == np.take_along_axis(advices, param_pos, axis=2)).all(axis=2), 3, 0)
+            # reward_prior += np.where((self.actions_np[:, :, :] == advices[:, :, :]).all(axis=2), 1, 0)
+            # reward_prior = np.where(advices[:, :, 0] == 0, 0, reward_prior)
+            # with warnings.catch_warnings():
+            #     warnings.filterwarnings("ignore", message="Mean of empty slice")
+            #     warnings.filterwarnings("ignore", message="invalid value encountered in true_divide")
+            #     reward_prior = reward_prior.mean(axis=1, where=(self.actions_np[:, :, 0] != -1))
+            # reward_prior[np.isnan(reward_prior)] = 0.
+            reward_prior = reward_prior.sum(axis=1)
+            reward = np.concatenate((reward, reward_prior.reshape(-1, 1)), axis=1)
+        elif self.prior_mode.is_reward_shaping:
+            reward_prior = [0] * self.num_envs
+            actions = np.concatenate((self.source_unit_idxs, self.actions_np), 2)
+            for idx in range(self.num_envs):
+                for action in actions[idx][actions[idx][:, 1] != -1]:
+                    try:
+                        reward_prior[idx] += self._reward_action(action[0] // self.width, action[0] % self.width, self.obs_cache[idx], action[1:])
+                    except ValueError as e:
+                        if str(e) == "Forbidden action":
+                            print("Forbidden action!!!\n", traceback.format_exc())
+                        else:
+                            raise
+            reward = np.concatenate((reward, np.array(reward_prior).reshape(-1, 1)), axis=1)
 
         obs = [self._encode_obs(np.array(ro), i) for i, ro in enumerate(responses.observation)]
         infos = [{"raw_rewards": item} for item in reward]

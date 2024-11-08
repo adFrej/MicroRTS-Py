@@ -19,12 +19,10 @@ JPype1 = "^1.3.0"
 peewee = "^3.14.8"
 spyder = {version = "^5.1.5", optional = true}
 PettingZoo = "^1.16.0"
-pyrdf2vec = "0.2.2"
 nest-asyncio = "^1.6.0"
 gensim = "^4.3.2"
 rdflib = "^7.0.0"
 aiohttp = "^3.9.3"
-pykeen = "1.5.0"
 scikit-learn = "^1.4.2"
 
 [tool.poetry.dev-dependencies]

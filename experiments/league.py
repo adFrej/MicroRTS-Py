@@ -64,10 +64,8 @@ def parse_args():
         help='the output path of the leaderboard csv')
     parser.add_argument('--maps', nargs='+', default=["maps/16x16/basesWorkers16x16A.xml"],
         help="the maps to do trueskill evaluations")
-    parser.add_argument('--prior', type=lambda x: bool(strtobool(x)), default=False, nargs='?', const=True,
-        help='if toggled, the observation space will be augmented with prior knowledge using graph embeddings')
-    parser.add_argument('--prior-mode', type=str, default="append_encoded", choices=["append_encoded", "append_raw", "rdf2vec", "rdf_only"],
-        help="the prior training mode, one of ['append_encoded' 'append_raw' 'rdf2vec' 'rdf_only']")
+    parser.add_argument('--prior', type=str, default="none", choices=["none", "append_encoded", "append_raw", "rdf_only"],
+        help="the prior bias mode, one of ['none', 'append_encoded', 'append_raw', 'rdf_only']")
     parser.add_argument('--prior-advice-freq', type=int, default=1,
         help='the number of steps between refreshing the prior advice')
     parser.add_argument('--runs-dir', type=str, default=None,
@@ -203,18 +201,17 @@ class Match:
                 map_paths=[map_path],
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
-                prior=args.prior,
-                prior_mode=args.prior_mode if args.prior_mode != "rdf_only" else MicroRTSGridModeVecEnv.prior_mode_append_raw,
+                prior_mode=args.prior if args.prior != "rdf_only" else MicroRTSGridModeVecEnv.PriorMode.APPEND_RAW,
                 prior_advice_freq=args.prior_advice_freq,
                 runs_dir=args.runs_dir,
                 seed=seed,
             )
-            self.agent = Agent(self.envs, rdf_only=args.prior_mode == "rdf_only").to(self.device)
-            if not args.prior_mode == "rdf_only":
+            self.agent = Agent(self.envs, rdf_only=args.prior == "rdf_only").to(self.device)
+            if not args.prior == "rdf_only":
                 self.agent.load_state_dict(torch.load(self.rl_ai, map_location=self.device))
             self.agent.eval()
         elif mode == 1:
-            if args.prior_mode == "rdf_only":
+            if args.prior == "rdf_only":
                 raise Exception("rdf_only is not supported in mode 1")
             self.envs = MicroRTSGridModeVecEnv(
                 num_bot_envs=0,
@@ -225,8 +222,7 @@ class Match:
                 map_paths=[map_path],
                 reward_weight=np.array([10.0, 1.0, 1.0, 0.2, 1.0, 4.0]),
                 autobuild=False,
-                prior=args.prior,
-                prior_mode=args.prior_mode if args.prior_mode != "rdf_only" else MicroRTSGridModeVecEnv.prior_mode_append_raw,
+                prior_mode=args.prior if args.prior != "rdf_only" else MicroRTSGridModeVecEnv.PriorMode.APPEND_RAW,
                 prior_advice_freq=args.prior_advice_freq,
                 runs_dir=args.runs_dir,
                 seed=seed,
