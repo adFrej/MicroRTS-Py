@@ -331,7 +331,7 @@ if __name__ == "__main__":
     print(f"Save frequency: {args.save_frequency}")
 
     # TRY NOT TO MODIFY: setup the environment
-    experiment_name = f"{args.gym_id}__{os.path.basename(__file__).rstrip('.py')}{'__prior' if args.prior else ''}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    experiment_name = f"{args.gym_id}__{os.path.basename(__file__).rstrip('.py')}{'__prior' if args.prior != 'none' else ''}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.prod_mode:
         import wandb
 
