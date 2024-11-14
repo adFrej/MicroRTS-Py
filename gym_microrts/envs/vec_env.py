@@ -286,23 +286,24 @@ class MicroRTSGridModeVecEnv:
             do_advices = self.step_obs[idx] % self.advice_freq == 0
             self.step_obs[idx] += 1
 
+            obs_flat = obs.transpose((1, 2, 0)).reshape(-1, obs.shape[0])
             if do_advices:
                 obs_5 = obs[5].copy()
-                obs_flat = obs.transpose((1, 2, 0)).reshape(-1, obs.shape[0])
                 cond = (obs_flat[:, 3] > 0) & (obs_flat[:, 2] == 1) & (obs_flat[:, 4] == 0)
                 indexes = np.arange(obs_flat.shape[0])[cond]
                 advices = np.zeros((obs_flat.shape[0], 7), dtype=np.int32)
                 for i in indexes:
                     advices[i] = self._advise_action(i // self.width, i % self.width, obs)
                 obs[5] = obs_5
-                if self.prior_mode.is_append_encoded:
-                    advices = advices.reshape(self.height, self.width, -1)
-                    advices = np.transpose(advices, (2, 0, 1))
                 self.advice_cache[idx] = advices
 
+            self.advice_cache[idx] = np.where(obs_flat[:, [3]] > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
             if self.prior_mode.is_append_encoded:
                 # self.advice_cache[idx] = np.where(obs[[3]] > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-                obs = np.concatenate((obs, self.advice_cache[idx]), axis=0)
+                advices = self.advice_cache[idx]
+                advices = advices.reshape(self.height, self.width, -1)
+                advices = np.transpose(advices, (2, 0, 1))
+                obs = np.concatenate((obs, advices), axis=0)
 
         if self.prior_mode.is_reward_shaping:
             self.obs_cache[idx] = obs
@@ -315,12 +316,8 @@ class MicroRTSGridModeVecEnv:
         for i in range(1, self.num_planes_len):
             obs_planes[obs_planes_idx, obs[i] + self.num_planes_prefix_sum[i]] = 1
 
-        if self.prior_mode.uses_advices:
-            self.advice_cache[idx] = np.where(obs[[3]].T > 0, self.advice_cache[idx], np.zeros_like(self.advice_cache[idx]))
-            if self.prior_mode.is_append_encoded:
-                obs_planes = np.where(obs[[3]].T > 0, obs_planes, np.concatenate((obs_planes[:, :29], np.zeros_like(obs_planes[:, 29:])), axis=1))
-            elif self.prior_mode.is_append_raw:
-                obs_planes = np.concatenate((obs_planes, self.advice_cache[idx]), axis=1)
+        if self.prior_mode.is_append_raw:
+            obs_planes = np.concatenate((obs_planes, self.advice_cache[idx]), axis=1)
         return obs_planes.reshape(self.height, self.width, -1)
 
     @staticmethod
@@ -449,24 +446,26 @@ class MicroRTSGridModeVecEnv:
                         raise ValueError("Invalid action with empty target")
                     aims = self._get_aims_at(unit_, obs_ij_)
                     targeted_directions_ = []
+                    used_priority = None
                     for priority in sorted(aims.keys()):
-                        wants_relation, wants_unit = aims[priority]
+                        wants_relation, wants_unit, aims_range = aims[priority]
                         targeted_directions_ = []
                         targeted_distances = []
                         for d in targeted_directions:
-                            distance = self._get_direction_closest_distance(obs, i, j, d, wants_relation, wants_unit)
+                            distance = self._get_direction_closest_distance(obs, i, j, d, wants_relation, wants_unit, aims_range)
                             if distance is None:
                                 continue
                             targeted_directions_.append(d)
                             targeted_distances.append(-distance)
                         if len(targeted_directions_) > 0:
+                            used_priority = priority + 1
                             break
                     if len(targeted_directions_) == 0:
                         targeted_directions_ = targeted_directions
-                        targeted_distances = [0] * len(targeted_directions_)
+                        targeted_distances = [- (self.height + self.width)] * len(targeted_directions_)
                     tdd = np.array([targeted_directions_, targeted_distances], dtype=float).T
                     tdd = self.random_generator.choice(tdd, p=softmax(targeted_distances))
-                    rating += (1 + tdd[1] / (self.height + self.width)) * 2
+                    rating += (1 + tdd[1] / (self.height + self.width)) * 2 / used_priority + 1 if used_priority is not None else 0.
                     targeted_directions = [tdd[0]]
 
                 for n, d in zip(targeted_neighbours, targeted_directions):
@@ -606,12 +605,14 @@ class MicroRTSGridModeVecEnv:
                     raise ValueError("Invalid action with empty target")
                 aims = self._get_aims_at(unit_, obs_ij_)
                 distance = None
+                used_priority = None
                 for priority in sorted(aims.keys()):
-                    wants_relation, wants_unit = aims[priority]
-                    distance = self._get_direction_closest_distance(obs, i, j, targeted_direction, wants_relation, wants_unit)
+                    wants_relation, wants_unit, aims_range = aims[priority]
+                    distance = self._get_direction_closest_distance(obs, i, j, targeted_direction, wants_relation, wants_unit, aims_range)
                     if distance is not None:
+                        used_priority = priority + 1
                         break
-                rating += (1 - distance / (self.height + self.width)) * 2 if distance is not None else 0.
+                rating += (1 - distance / (self.height + self.width)) * 3 / used_priority + 1 if distance is not None else 0.
 
             rating += self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, targeted_neighbour)
         else:
@@ -697,7 +698,10 @@ class MicroRTSGridModeVecEnv:
             priority = int(self.graph.value(subject=a, predicate=rdflib.URIRef("http://microrts.com/game/unit/priority")))
             if priority in aims:
                 raise ValueError("Multiple aimsAt at same priority")
-            aims[priority] = (wants_relation, wants_unit)
+            range_ = self.graph.value(subject=a, predicate=rdflib.URIRef("http://microrts.com/game/unit/range"))
+            if range_ is not None:
+                range_ = int(range_)
+            aims[priority] = (wants_relation, wants_unit, range_)
         return aims
 
     def _distant_pos_to_coords(self, pos, i, j):
@@ -739,14 +743,13 @@ class MicroRTSGridModeVecEnv:
             idx += diff * 2
         return targets, relative_pos
 
-    def _get_direction_closest_distance(self, obs, i, j, direction, relation, unit=None):
+    def _get_direction_closest_distance(self, obs, i, j, direction, relation, unit=None, range_=None):
         ii, jj = [0, self.height], [0, self.width]
-        non_enemy_range = 3
-        if relation != "enemy":
-            ii[0] = max(i - non_enemy_range, 0)
-            ii[1] = min(i + non_enemy_range + 1, self.height)
-            jj[0] = max(j - non_enemy_range, 0)
-            jj[1] = min(j + non_enemy_range + 1, self.width)
+        if range_ is not None:
+            ii[0] = max(i - range_, 0)
+            ii[1] = min(i + range_ + 1, self.height)
+            jj[0] = max(j - range_, 0)
+            jj[1] = min(j + range_ + 1, self.width)
         if direction == 0:
             ii[1] = i
         elif direction == 1:
