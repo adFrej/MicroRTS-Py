@@ -465,7 +465,7 @@ class MicroRTSGridModeVecEnv:
                         targeted_distances = [- (self.height + self.width)] * len(targeted_directions_)
                     tdd = np.array([targeted_directions_, targeted_distances], dtype=float).T
                     tdd = self.random_generator.choice(tdd, p=softmax(targeted_distances))
-                    rating += (1 + tdd[1] / (self.height + self.width)) * 2 / used_priority + 1 if used_priority is not None else 0.
+                    rating += (1 + tdd[1] / (self.height + self.width)) * 3 / used_priority + 1 if used_priority is not None else 0.
                     targeted_directions = [tdd[0]]
 
                 for n, d in zip(targeted_neighbours, targeted_directions):
