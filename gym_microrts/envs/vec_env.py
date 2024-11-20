@@ -446,9 +446,9 @@ class MicroRTSGridModeVecEnv:
                         raise ValueError("Invalid action with empty target")
                     aims = self._get_aims_at(unit_, obs_ij_)
                     targeted_directions_ = []
-                    used_priority = None
+                    used_weight = 0.
                     for priority in sorted(aims.keys()):
-                        wants_relation, wants_unit, aims_range = aims[priority]
+                        wants_relation, wants_unit, aims_weight, aims_range = aims[priority]
                         targeted_directions_ = []
                         targeted_distances = []
                         for d in targeted_directions:
@@ -458,14 +458,14 @@ class MicroRTSGridModeVecEnv:
                             targeted_directions_.append(d)
                             targeted_distances.append(-distance)
                         if len(targeted_directions_) > 0:
-                            used_priority = priority + 1
+                            used_weight = aims_weight
                             break
                     if len(targeted_directions_) == 0:
                         targeted_directions_ = targeted_directions
                         targeted_distances = [- (self.height + self.width)] * len(targeted_directions_)
                     tdd = np.array([targeted_directions_, targeted_distances], dtype=float).T
                     tdd = self.random_generator.choice(tdd, p=softmax(targeted_distances))
-                    rating += (1 + tdd[1] / (self.height + self.width)) * 3 / used_priority + 1 if used_priority is not None else 0.
+                    rating += used_weight
                     targeted_directions = [tdd[0]]
 
                 for n, d in zip(targeted_neighbours, targeted_directions):
@@ -595,6 +595,9 @@ class MicroRTSGridModeVecEnv:
                 if targeted_neighbour[3] - 1 not in targets_units:
                     raise ValueError("Forbidden action")
             elif targets_player == "empty":
+                # targeted_directions = directions[neighbours_relation == targets_player]
+                # if len(targeted_directions) == 0:
+                #     raise ValueError("Forbidden action")
                 if action_id == 1:
                     unit_ = unit
                     obs_ij_ = obs_ij
@@ -604,15 +607,21 @@ class MicroRTSGridModeVecEnv:
                 else:
                     raise ValueError("Invalid action with empty target")
                 aims = self._get_aims_at(unit_, obs_ij_)
-                distance = None
-                used_priority = None
+                used_weight = 0.
                 for priority in sorted(aims.keys()):
-                    wants_relation, wants_unit, aims_range = aims[priority]
+                    wants_relation, wants_unit, aims_weight, aims_range = aims[priority]
                     distance = self._get_direction_closest_distance(obs, i, j, targeted_direction, wants_relation, wants_unit, aims_range)
                     if distance is not None:
-                        used_priority = priority + 1
+                        used_weight = aims_weight
                         break
-                rating += (1 - distance / (self.height + self.width)) * 3 / used_priority + 1 if distance is not None else 0.
+                    # distance_any = None
+                    # for d in targeted_directions:
+                    #     distance_any = self._get_direction_closest_distance(obs, i, j, d, wants_relation, wants_unit, aims_range)
+                    #     if distance_any is not None:
+                    #         break
+                    # if distance_any is not None:
+                    #     break
+                rating += used_weight
 
             rating += self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, targeted_neighbour)
         else:
@@ -698,10 +707,11 @@ class MicroRTSGridModeVecEnv:
             priority = int(self.graph.value(subject=a, predicate=rdflib.URIRef("http://microrts.com/game/unit/priority")))
             if priority in aims:
                 raise ValueError("Multiple aimsAt at same priority")
+            weight = float(self.graph.value(subject=a, predicate=rdflib.URIRef("http://microrts.com/game/unit/weight")))
             range_ = self.graph.value(subject=a, predicate=rdflib.URIRef("http://microrts.com/game/unit/range"))
             if range_ is not None:
                 range_ = int(range_)
-            aims[priority] = (wants_relation, wants_unit, range_)
+            aims[priority] = (wants_relation, wants_unit, weight, range_)
         return aims
 
     def _distant_pos_to_coords(self, pos, i, j):
@@ -743,13 +753,13 @@ class MicroRTSGridModeVecEnv:
             idx += diff * 2
         return targets, relative_pos
 
-    def _get_direction_closest_distance(self, obs, i, j, direction, relation, unit=None, range_=None):
+    def _get_direction_closest_distance(self, obs, i, j, direction, relation, unit=None, direction_range_=None):
         ii, jj = [0, self.height], [0, self.width]
-        if range_ is not None:
-            ii[0] = max(i - range_, 0)
-            ii[1] = min(i + range_ + 1, self.height)
-            jj[0] = max(j - range_, 0)
-            jj[1] = min(j + range_ + 1, self.width)
+        if direction_range_ is not None:
+            ii[0] = max(i - direction_range_, 0)
+            ii[1] = min(i + direction_range_ + 1, self.height)
+            jj[0] = max(j - direction_range_, 0)
+            jj[1] = min(j + direction_range_ + 1, self.width)
         if direction == 0:
             ii[1] = i
         elif direction == 1:
@@ -780,7 +790,11 @@ class MicroRTSGridModeVecEnv:
             distances = distances[(self._relation(obs[:, i, j], obs_) == relation) & (obs_[:, 3] - 1 == self._node_to_id(unit))]
         if len(distances) == 0:
             return None
-        return np.min(distances)
+        distance = np.min(distances)
+        if direction_range_ is not None:
+            return distance if distance <= direction_range_ else None
+        return distance
+
 
     def _get_closest_units(self, obs, i, j, direction, relation, unit=None):
         ij = (i, j)

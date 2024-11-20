@@ -13,7 +13,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/MicroRTS-Py/experiments/league.py" />
-    <option name="PARAMETERS" value="--exp-name kg10 --evals models/MicroRTSGridModeVecEnv__ppo_gridnet__prior__kg10__71__1731552669/9670656.pt --update-db false --output-path scores.csv --model-type ppo_gridnet --runs-dir runs/MicroRTSGridModeVecEnv__ppo_gridnet__evals --add-dir --seed 0" />
+    <option name="PARAMETERS" value="--exp-name kg10 --evals models/MicroRTSGridModeVecEnv__ppo_gridnet__prior__kg12__70__1732011202/7501824.pt --update-db false --output-path scores.csv --model-type ppo_gridnet --runs-dir runs/MicroRTSGridModeVecEnv__ppo_gridnet__evals --add-dir --seed 0" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />
