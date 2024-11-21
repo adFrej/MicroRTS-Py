@@ -13,7 +13,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/MicroRTS-Py/experiments/ppo_gridnet.py" />
-    <option name="PARAMETERS" value="--total-timesteps 10000000 --num-eval 30 --num-bot-envs 24 --num-selfplay-envs 0 --seed 20 --max-eval-workers 3 --reward-shaping false" />
+    <option name="PARAMETERS" value="--total-timesteps 10000000 --num-eval 30 --num-bot-envs 24 --num-selfplay-envs 0 --seed 22 --max-eval-workers 3 --reward-shaping true" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />
