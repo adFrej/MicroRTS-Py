@@ -446,6 +446,7 @@ class MicroRTSGridModeVecEnv:
                         raise ValueError("Invalid action with empty target")
                     aims = self._get_aims_at(unit_, obs_ij_)
                     targeted_directions_ = []
+                    ignored_directions = []
                     used_weight = 0.
                     for priority in sorted(aims.keys()):
                         wants_relation, wants_unit, aims_weight, aims_range = aims[priority]
@@ -455,6 +456,9 @@ class MicroRTSGridModeVecEnv:
                             distance = self._get_direction_closest_distance(obs, i, j, d, wants_relation, wants_unit, aims_range)
                             if distance is None:
                                 continue
+                            if aims_weight < 0:
+                                ignored_directions.append(d)
+                                continue
                             targeted_directions_.append(d)
                             targeted_distances.append(-distance)
                         if len(targeted_directions_) > 0:
@@ -463,8 +467,11 @@ class MicroRTSGridModeVecEnv:
                     if len(targeted_directions_) == 0:
                         targeted_directions_ = targeted_directions
                         targeted_distances = [- (self.height + self.width)] * len(targeted_directions_)
-                    tdd = np.array([targeted_directions_, targeted_distances], dtype=float).T
-                    tdd = self.random_generator.choice(tdd, p=softmax(targeted_distances))
+                    tdd = [(d, distance) for d, distance in zip(targeted_directions_, targeted_distances) if d not in ignored_directions]
+                    if len(tdd) == 0:
+                        continue
+                    tdd = np.array(tdd)
+                    tdd = self.random_generator.choice(tdd, p=softmax(tdd[:, 1]))
                     rating += used_weight
                     targeted_directions = [tdd[0]]
 
@@ -595,9 +602,9 @@ class MicroRTSGridModeVecEnv:
                 if targeted_neighbour[3] - 1 not in targets_units:
                     raise ValueError("Forbidden action")
             elif targets_player == "empty":
-                # targeted_directions = directions[neighbours_relation == targets_player]
-                # if len(targeted_directions) == 0:
-                #     raise ValueError("Forbidden action")
+                targeted_directions = directions[neighbours_relation == targets_player]
+                if len(targeted_directions) == 0:
+                    raise ValueError("Forbidden action")
                 if action_id == 1:
                     unit_ = unit
                     obs_ij_ = obs_ij
@@ -614,13 +621,16 @@ class MicroRTSGridModeVecEnv:
                     if distance is not None:
                         used_weight = aims_weight
                         break
-                    # distance_any = None
-                    # for d in targeted_directions:
-                    #     distance_any = self._get_direction_closest_distance(obs, i, j, d, wants_relation, wants_unit, aims_range)
-                    #     if distance_any is not None:
-                    #         break
-                    # if distance_any is not None:
-                    #     break
+                    if aims_weight < 0:
+                        continue
+                    distance_any = None
+                    for d in set(targeted_directions) - {targeted_direction}:
+                        distance_any = self._get_direction_closest_distance(obs, i, j, d, wants_relation, wants_unit, aims_range)
+                        if distance_any is not None:
+                            used_weight = -aims_weight
+                            break
+                    if distance_any is not None:
+                        break
                 rating += used_weight
 
             rating += self._rate_action_complete(action_node, unit, obs_ij, neighbours, neighbours_relation, prefers_self, prefers_friendly, prefers_enemy, prefers_target, targeted_neighbour)
